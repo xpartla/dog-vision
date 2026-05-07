@@ -33,9 +33,9 @@ KP_RIGHT_EYE = "right_eye"
 KP_LEFT_EAR_BASE = "left_earbase"
 KP_RIGHT_EAR_BASE = "right_earbase"
 KP_NECK_BASE = "neck_base"
-KP_BACK_BASE = "back_base"        # near hips end
+KP_BACK_BASE = "back_base"        # FRONT of the back (near withers / shoulders)
 KP_BACK_MIDDLE = "back_middle"
-KP_BACK_END = "back_end"          # near withers / shoulders
+KP_BACK_END = "back_end"          # REAR of the back (near hips / sacrum)
 KP_TAIL_BASE = "tail_base"
 KP_TAIL_END = "tail_end"
 KP_FRONT_LEFT_THIGH = "front_left_thai"   # SuperAnimal labels these "thai"
@@ -355,10 +355,10 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
                                     max(p.confidence for p in paw_pts))
 
     # Hip-above-paws: distinguishes hindquarters-on-ground (sitting / lying) from
-    # hindquarters-in-the-air (standing / standing-with-head-down). Combined with
-    # trunk-above-paws this separates lying from standing-head-down: lying has
-    # both low; standing-head-down has hip high, only the head low.
-    hip = frame.get(KP_BACK_BASE) or frame.get(KP_TAIL_BASE)
+    # hindquarters-in-the-air (standing / standing-with-head-down). The "hip"
+    # landmark in SuperAnimal is `back_end` (rear of the back), with tail_base
+    # as a near-by fallback.
+    hip = frame.get(KP_BACK_END) or frame.get(KP_TAIL_BASE)
     hip_above_paws: Optional[float] = None
     hip_above_paws_conf = 0.0
     if hip and len(paw_pts) >= 1 and bbox_max is not None:
@@ -366,8 +366,9 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
         hip_above_paws = (paw_y - hip.y) / bbox_max
         hip_above_paws_conf = min(hip.confidence, max(p.confidence for p in paw_pts))
 
-    # Spine pitch (front higher = positive)
-    shoulder = frame.get(KP_BACK_END) or frame.get(KP_NECK_BASE)
+    # Spine pitch (shoulder higher than hip = positive = sitting indicator).
+    # Shoulder = `back_base` (front of back), hip = `back_end` (rear of back).
+    shoulder = frame.get(KP_BACK_BASE) or frame.get(KP_NECK_BASE)
     spine_pitch: Optional[float] = None
     spine_pitch_conf = 0.0
     if hip and shoulder:
@@ -421,7 +422,12 @@ def classify_posture(features: PostureFeatures) -> tuple[str, float]:
     trunk_low = trunk_ratio is not None and trunk_ratio < 0.20
     hip_low = hip_ratio is not None and hip_ratio < 0.20
 
-    body_on_ground = trunk_low or (trunk_ratio is None and head_low and hip_low)
+    # Lying requires the trunk to be on the ground. Direct check via trunk_low,
+    # or — when trunk is missing or only moderately raised (sphinx pose, where
+    # the chest is propped up on the front legs) — a fallback that needs both
+    # hip and head to be on the ground.
+    trunk_not_high = trunk_ratio is None or trunk_ratio < 0.40
+    body_on_ground = trunk_low or (hip_low and head_low and trunk_not_high)
 
     if body_on_ground:
         # Sum the confidences of the supporting low signals
@@ -463,10 +469,10 @@ def classify_posture(features: PostureFeatures) -> tuple[str, float]:
             if ang < 105:
                 scores["sitting"] += 1.5 * w
                 available_weight += w
-            elif ang > 145:
+            elif ang > 140:
                 scores["standing"] += 1.5 * w
                 available_weight += w
-            # 105-145 ambiguous, no vote
+            # 105-140 ambiguous, no vote
 
         # Spine pitch: front higher than back = sitting
         if features.spine_pitch_deg is not None:
