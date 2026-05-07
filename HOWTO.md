@@ -230,19 +230,30 @@ Weights come from HuggingFace; if your network is restricted, set
 `HF_HUB_OFFLINE=0` and ensure outbound HTTPS to `huggingface.co` works.
 
 **`process_video.py --video-adapt` fails with `CUDA error: out of memory`.**
-DLC's adaptation pass trains on full-resolution frames at batch size 8. On a
-6–12 GB consumer GPU this only fits at ≤1080p. Two fixes:
+The adaptation pass does both detector and pose training; the detector
+(Faster R-CNN ResNet-50) is heavy and DLC's default batch size is 8, which
+OOMs the training step on a 6-12 GB consumer GPU even at 1080p.
+
+In order of how aggressive the fix is:
 
 ```bash
-# Downscale once, then run inference + adapt on the smaller copy.
-# SuperAnimal crops + resizes internally anyway — no accuracy loss.
-ffmpeg -i samples/video2.mp4 -vf scale=1920:-2 samples/video2_1080p.mp4
-python process_video.py samples/video2_1080p.mp4 --video-adapt
+# 1. Lower the adaptation batch size — usually enough on its own.
+python process_video.py samples/video2_1080p.mp4 --video-adapt --video-adapt-batch-size 1
+
+# 2. Combine with downscaling if batch=1 alone still OOMs.
+ffmpeg -i samples/video2.mp4 -vf scale=1280:-2 samples/video2_720p.mp4
+python process_video.py samples/video2_720p.mp4 --video-adapt --video-adapt-batch-size 1
+
+# 3. Set PyTorch's expandable segments allocator (helps fragmentation, not
+#    total memory) — combine with the above:
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
-Or skip `--video-adapt` and rely on the 1-Euro keypoint smoother in
-`classify_video.py` for jitter mitigation — it works at any resolution and
-costs nothing.
+If all of those still fail, **just skip `--video-adapt`** and rely on the
+1-Euro keypoint smoother in `classify_video.py` and `live_webcam.py`. It runs
+at any resolution, costs nothing, and removes most jitter. `--video-adapt`
+is the "polish for a final render" knob; the 1-Euro filter is the daily
+driver.
 
 ---
 

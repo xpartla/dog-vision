@@ -48,12 +48,24 @@ def main() -> None:
              "Significantly reduces keypoint jitter at the cost of much longer "
              "runtime. Recommended for final renders, not for iterative tuning.",
     )
+    parser.add_argument(
+        "--video-adapt-batch-size",
+        type=int,
+        default=None,
+        help="Adaptation training batch size. DLC's default is 8, which OOMs "
+             "the detector training on a 6-12 GB GPU. Try 1 or 2 if you hit "
+             "CUDA out-of-memory during --video-adapt.",
+    )
     args = parser.parse_args()
 
     if not args.video.exists():
         raise SystemExit(f"Video not found: {args.video}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    extra_kwargs = {}
+    if args.video_adapt_batch_size is not None:
+        extra_kwargs["video_adapt_batch_size"] = args.video_adapt_batch_size
 
     deeplabcut.video_inference_superanimal(
         videos=[str(args.video)],
@@ -63,6 +75,7 @@ def main() -> None:
         dest_folder=str(args.output_dir),
         pcutoff=args.pcutoff,
         video_adapt=args.video_adapt,
+        **extra_kwargs,
     )
 
     print(f"\nDone. Annotated outputs in: {args.output_dir.resolve()}")
