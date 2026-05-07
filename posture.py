@@ -270,12 +270,14 @@ class PostureFeatures:
     back_knee_angle_deg: Optional[float]       # ~180 straight, ~90 sharp bend
     trunk_above_paws_ratio: Optional[float]    # (paw_y - trunk_median_y) / bbox_max
     head_above_paws_ratio: Optional[float]     # (paw_y - head_mean_y) / bbox_max
+    hip_above_paws_ratio: Optional[float]      # (paw_y - hip_y) / bbox_max
     spine_pitch_deg: Optional[float]           # angle of spine vs horizontal; +ve = front higher
 
     body_aspect_conf: float = 0.0
     back_knee_conf: float = 0.0
     trunk_above_paws_conf: float = 0.0
     head_above_paws_conf: float = 0.0
+    hip_above_paws_conf: float = 0.0
     spine_pitch_conf: float = 0.0
 
 
@@ -352,8 +354,19 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
         head_above_paws_conf = min(min(p.confidence for p in head_pts),
                                     max(p.confidence for p in paw_pts))
 
-    # Spine pitch (front higher = positive)
+    # Hip-above-paws: distinguishes hindquarters-on-ground (sitting / lying) from
+    # hindquarters-in-the-air (standing / standing-with-head-down). Combined with
+    # trunk-above-paws this separates lying from standing-head-down: lying has
+    # both low; standing-head-down has hip high, only the head low.
     hip = frame.get(KP_BACK_BASE) or frame.get(KP_TAIL_BASE)
+    hip_above_paws: Optional[float] = None
+    hip_above_paws_conf = 0.0
+    if hip and len(paw_pts) >= 1 and bbox_max is not None:
+        paw_y = max(p.y for p in paw_pts)
+        hip_above_paws = (paw_y - hip.y) / bbox_max
+        hip_above_paws_conf = min(hip.confidence, max(p.confidence for p in paw_pts))
+
+    # Spine pitch (front higher = positive)
     shoulder = frame.get(KP_BACK_END) or frame.get(KP_NECK_BASE)
     spine_pitch: Optional[float] = None
     spine_pitch_conf = 0.0
@@ -369,11 +382,13 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
         back_knee_angle_deg=back_knee,
         trunk_above_paws_ratio=trunk_above_paws,
         head_above_paws_ratio=head_above_paws,
+        hip_above_paws_ratio=hip_above_paws,
         spine_pitch_deg=spine_pitch,
         body_aspect_conf=body_aspect_conf,
         back_knee_conf=back_knee_conf,
         trunk_above_paws_conf=trunk_above_paws_conf,
         head_above_paws_conf=head_above_paws_conf,
+        hip_above_paws_conf=hip_above_paws_conf,
         spine_pitch_conf=spine_pitch_conf,
     )
 
@@ -386,76 +401,86 @@ POSTURE_LABELS = ("sitting", "standing", "lying", "unknown")
 def classify_posture(features: PostureFeatures) -> tuple[str, float]:
     """Return (label, score-in-0-1).
 
-    Priority of signals:
-      1. head-above-paws — head near the paws is unambiguously lying, and the
-         head is the most reliably detected region on a fluffy Aussie.
-      2. trunk-above-paws — distinguishes sit from stand once we know it's
-         not lying.
-      3. back-knee angle — confirms sitting (sharp bend) or standing
-         (extended). Suppressed when head/trunk indicate the body is on the
-         ground (a lying dog with extended legs has straight knees).
-      4. spine pitch and body H/W are weak reinforcements only.
+    Lying is detected by the *trunk* being on the ground (trunk_low). If trunk
+    data is missing, we fall back to requiring both hip and head to be low —
+    that combination is the geometric signature of a horizontal dog. This
+    explicitly rejects "standing with head down" (head_low alone), where the
+    dog is upright but bent over to reach the ground.
+
+    Sit-vs-stand is then decided by hip-above-paws (hindquarters on the ground
+    vs raised), reinforced by knee angle, trunk position, and spine pitch.
     """
     scores = {"sitting": 0.0, "standing": 0.0, "lying": 0.0}
     available_weight = 0.0
 
-    head_low = (features.head_above_paws_ratio is not None
-                and features.head_above_paws_ratio < 0.30)
-    trunk_low = (features.trunk_above_paws_ratio is not None
-                 and features.trunk_above_paws_ratio < 0.20)
-    body_low = head_low or trunk_low
+    head_ratio = features.head_above_paws_ratio
+    trunk_ratio = features.trunk_above_paws_ratio
+    hip_ratio = features.hip_above_paws_ratio
 
-    if features.head_above_paws_ratio is not None:
-        w = features.head_above_paws_conf
+    head_low = head_ratio is not None and head_ratio < 0.30
+    trunk_low = trunk_ratio is not None and trunk_ratio < 0.20
+    hip_low = hip_ratio is not None and hip_ratio < 0.20
+
+    body_on_ground = trunk_low or (trunk_ratio is None and head_low and hip_low)
+
+    if body_on_ground:
+        # Sum the confidences of the supporting low signals
+        w = 0.0
+        if trunk_low:
+            w += features.trunk_above_paws_conf
+        if head_low:
+            w += features.head_above_paws_conf
+        if hip_low:
+            w += features.hip_above_paws_conf
+        scores["lying"] += 3.0 * w
         available_weight += w
-        r = features.head_above_paws_ratio
-        if r < 0.30:
-            scores["lying"] += 3.0 * w           # dominant lying signal
-        elif r > 0.55:
-            scores["sitting"] += 0.4 * w         # head high = not lying; weak vote
-            scores["standing"] += 0.4 * w
 
-    if features.trunk_above_paws_ratio is not None:
-        w = features.trunk_above_paws_conf
-        available_weight += w
-        r = features.trunk_above_paws_ratio
-        if r < 0.20:
-            scores["lying"] += 1.8 * w
-        elif r < 0.50:
-            scores["sitting"] += 1.2 * w
-        else:
-            if body_low:
-                # Trunk says standing but head says lying — trust the head.
-                scores["lying"] += 0.5 * w
-            else:
-                scores["standing"] += 1.2 * w
-
-    if features.back_knee_angle_deg is not None:
-        w = features.back_knee_conf
-        ang = features.back_knee_angle_deg
-        if ang < 110:
-            scores["sitting"] += 1.5 * w
+    else:
+        # Hip-above-paws: primary sit/stand discriminator
+        if hip_ratio is not None:
+            w = features.hip_above_paws_conf
             available_weight += w
-        elif ang > 145:
-            if not body_low:
+            if hip_ratio < 0.20:
+                scores["sitting"] += 1.5 * w
+            elif hip_ratio > 0.35:
+                scores["standing"] += 1.5 * w
+            # 0.20-0.35 ambiguous, no vote
+
+        # Trunk-above-paws: reinforces sit/stand
+        if trunk_ratio is not None:
+            w = features.trunk_above_paws_conf
+            if trunk_ratio > 0.45:
+                scores["standing"] += 0.8 * w
+                available_weight += w
+            elif trunk_ratio < 0.30:
+                scores["sitting"] += 0.8 * w
+                available_weight += w
+
+        # Knee angle: clear bend = sitting, clearly extended = standing
+        if features.back_knee_angle_deg is not None:
+            w = features.back_knee_conf
+            ang = features.back_knee_angle_deg
+            if ang < 105:
+                scores["sitting"] += 1.5 * w
+                available_weight += w
+            elif ang > 145:
                 scores["standing"] += 1.5 * w
                 available_weight += w
-        else:
-            # Ambiguous mid-range: don't count this as evidence either way.
-            pass
+            # 105-145 ambiguous, no vote
 
-    if features.spine_pitch_deg is not None:
-        p = features.spine_pitch_deg
-        if 15 < p < 60 and not body_low:
-            w = features.spine_pitch_conf
-            scores["sitting"] += 0.8 * w
-            available_weight += w
+        # Spine pitch: front higher than back = sitting
+        if features.spine_pitch_deg is not None:
+            p = features.spine_pitch_deg
+            if 15 < p < 60:
+                w = features.spine_pitch_conf
+                scores["sitting"] += 0.8 * w
+                available_weight += w
 
-    if features.body_aspect_h_over_w is not None:
-        ar = features.body_aspect_h_over_w
-        if ar < 0.4:
-            w = features.body_aspect_conf * 0.4
-            scores["lying"] += 0.6 * w
+        # Head high (>0.55) = weak corroboration that the dog is upright
+        if head_ratio is not None and head_ratio > 0.55:
+            w = features.head_above_paws_conf
+            scores["sitting"] += 0.3 * w
+            scores["standing"] += 0.3 * w
             available_weight += w
 
     if available_weight < 0.5:

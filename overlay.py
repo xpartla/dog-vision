@@ -140,6 +140,7 @@ def draw_overlay(
             f"knee:       {f.back_knee_angle_deg:.0f} deg" if f.back_knee_angle_deg is not None else "knee:       -",
             f"head/paws:  {f.head_above_paws_ratio:.2f}" if f.head_above_paws_ratio is not None else "head/paws:  -",
             f"trunk/paws: {f.trunk_above_paws_ratio:.2f}" if f.trunk_above_paws_ratio is not None else "trunk/paws: -",
+            f"hip/paws:   {f.hip_above_paws_ratio:.2f}" if f.hip_above_paws_ratio is not None else "hip/paws:   -",
             f"spine:      {f.spine_pitch_deg:+.0f} deg" if f.spine_pitch_deg is not None else "spine:      -",
         ]
         for k, line in enumerate(lines):
