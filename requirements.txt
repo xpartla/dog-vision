@@ -1,4 +1,4 @@
-deeplabcut>=3.0.0
+deeplabcut>=3.0.0rc14
 opencv-python>=4.8.0
 numpy>=1.24.0
 pandas>=2.0.0
