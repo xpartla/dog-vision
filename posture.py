@@ -268,19 +268,21 @@ class KeypointSmoother:
 class PostureFeatures:
     body_aspect_h_over_w: Optional[float]      # height / width of visible-keypoint bbox
     back_knee_angle_deg: Optional[float]       # ~180 straight, ~90 sharp bend
-    trunk_above_paws_ratio: Optional[float]    # (paw_y - trunk_median_y) / trunk_length
+    trunk_above_paws_ratio: Optional[float]    # (paw_y - trunk_median_y) / bbox_max
+    head_above_paws_ratio: Optional[float]     # (paw_y - head_mean_y) / bbox_max
     spine_pitch_deg: Optional[float]           # angle of spine vs horizontal; +ve = front higher
 
     body_aspect_conf: float = 0.0
     back_knee_conf: float = 0.0
     trunk_above_paws_conf: float = 0.0
+    head_above_paws_conf: float = 0.0
     spine_pitch_conf: float = 0.0
 
 
 def compute_posture_features(frame: Frame) -> PostureFeatures:
     visible = frame.visible()
 
-    # Body H/W aspect from all visible keypoints (weak signal at low camera angles)
+    # Body H/W aspect (weak signal; weighted lightly in the classifier)
     body_aspect: Optional[float] = None
     body_aspect_conf = 0.0
     if len(visible) >= 4:
@@ -291,6 +293,18 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
         if w > 1.0:
             body_aspect = h / w
             body_aspect_conf = float(np.median([kp.confidence for kp in visible.values()]))
+
+    # bbox_max: longer side of the bounding box of visible keypoints. Used as
+    # the normalizer for the height-ratio features below — robust to body
+    # foreshortening (a body axis in the image can shrink with viewpoint, but
+    # the overall bbox extent doesn't collapse the same way).
+    bbox_max: Optional[float] = None
+    if len(visible) >= 2:
+        xs = [kp.x for kp in visible.values()]
+        ys = [kp.y for kp in visible.values()]
+        side = max(max(xs) - min(xs), max(ys) - min(ys))
+        if side > 1.0:
+            bbox_max = side
 
     # Back-knee angle: pick the leg with highest min-confidence
     back_knee: Optional[float] = None
@@ -306,27 +320,37 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
             if not math.isnan(angle) and conf > back_knee_conf:
                 back_knee, back_knee_conf = angle, conf
 
-    # Trunk-above-paws ratio: median Y of trunk vs lowest paw, normalized by trunk length.
-    # This is the strongest sit/stand/lie discriminator and is robust to the head being raised.
-    trunk_pts = [frame.get(n) for n in TRUNK_KEYPOINTS]
-    trunk_pts = [p for p in trunk_pts if p is not None]
     paw_pts = [frame.get(n) for n in ALL_PAW_KEYPOINTS]
     paw_pts = [p for p in paw_pts if p is not None]
 
+    # Trunk-above-paws: median trunk Y vs lowest paw, normalized by bbox_max.
+    trunk_pts = [frame.get(n) for n in TRUNK_KEYPOINTS]
+    trunk_pts = [p for p in trunk_pts if p is not None]
+
     trunk_above_paws: Optional[float] = None
     trunk_above_paws_conf = 0.0
-    if len(trunk_pts) >= 2 and len(paw_pts) >= 1:
-        ys = sorted(p.y for p in trunk_pts)
-        trunk_median_y = ys[len(ys) // 2]
-        paw_y = max(p.y for p in paw_pts)            # bottom-most paw (largest y)
-        trunk_xs = [p.x for p in trunk_pts]
-        trunk_ys = [p.y for p in trunk_pts]
-        trunk_length = math.hypot(max(trunk_xs) - min(trunk_xs),
-                                  max(trunk_ys) - min(trunk_ys))
-        if trunk_length > 1.0:
-            trunk_above_paws = (paw_y - trunk_median_y) / trunk_length
-            trunk_above_paws_conf = min(min(p.confidence for p in trunk_pts),
-                                         max(p.confidence for p in paw_pts))
+    if len(trunk_pts) >= 2 and len(paw_pts) >= 1 and bbox_max is not None:
+        trunk_ys_sorted = sorted(p.y for p in trunk_pts)
+        trunk_median_y = trunk_ys_sorted[len(trunk_ys_sorted) // 2]
+        paw_y = max(p.y for p in paw_pts)
+        trunk_above_paws = (paw_y - trunk_median_y) / bbox_max
+        trunk_above_paws_conf = min(min(p.confidence for p in trunk_pts),
+                                     max(p.confidence for p in paw_pts))
+
+    # Head-above-paws: mean head Y (nose + eyes) vs lowest paw, normalized by
+    # bbox_max. The head is reliably detected on Aussies (face fur is short),
+    # and head-near-paws is the most unambiguous lying signal.
+    head_pts = [frame.get(n) for n in (KP_NOSE, KP_LEFT_EYE, KP_RIGHT_EYE)]
+    head_pts = [p for p in head_pts if p is not None]
+
+    head_above_paws: Optional[float] = None
+    head_above_paws_conf = 0.0
+    if head_pts and len(paw_pts) >= 1 and bbox_max is not None:
+        head_y = sum(p.y for p in head_pts) / len(head_pts)
+        paw_y = max(p.y for p in paw_pts)
+        head_above_paws = (paw_y - head_y) / bbox_max
+        head_above_paws_conf = min(min(p.confidence for p in head_pts),
+                                    max(p.confidence for p in paw_pts))
 
     # Spine pitch (front higher = positive)
     hip = frame.get(KP_BACK_BASE) or frame.get(KP_TAIL_BASE)
@@ -344,10 +368,12 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
         body_aspect_h_over_w=body_aspect,
         back_knee_angle_deg=back_knee,
         trunk_above_paws_ratio=trunk_above_paws,
+        head_above_paws_ratio=head_above_paws,
         spine_pitch_deg=spine_pitch,
         body_aspect_conf=body_aspect_conf,
         back_knee_conf=back_knee_conf,
         trunk_above_paws_conf=trunk_above_paws_conf,
+        head_above_paws_conf=head_above_paws_conf,
         spine_pitch_conf=spine_pitch_conf,
     )
 
@@ -360,58 +386,77 @@ POSTURE_LABELS = ("sitting", "standing", "lying", "unknown")
 def classify_posture(features: PostureFeatures) -> tuple[str, float]:
     """Return (label, score-in-0-1).
 
-    Decision logic, in priority order:
-      1. trunk-above-paws is the strongest signal — it directly measures whether
-         the body is on the ground, raised, or somewhere between.
-      2. back-knee angle adds confidence to sit/stand, but is *suppressed* when
-         the trunk is low (a lying dog with extended legs has straight knees).
-      3. spine pitch reinforces sitting (front higher than back).
-      4. body H/W is a weak tiebreaker only.
+    Priority of signals:
+      1. head-above-paws — head near the paws is unambiguously lying, and the
+         head is the most reliably detected region on a fluffy Aussie.
+      2. trunk-above-paws — distinguishes sit from stand once we know it's
+         not lying.
+      3. back-knee angle — confirms sitting (sharp bend) or standing
+         (extended). Suppressed when head/trunk indicate the body is on the
+         ground (a lying dog with extended legs has straight knees).
+      4. spine pitch and body H/W are weak reinforcements only.
     """
     scores = {"sitting": 0.0, "standing": 0.0, "lying": 0.0}
     available_weight = 0.0
 
+    head_low = (features.head_above_paws_ratio is not None
+                and features.head_above_paws_ratio < 0.30)
     trunk_low = (features.trunk_above_paws_ratio is not None
                  and features.trunk_above_paws_ratio < 0.20)
+    body_low = head_low or trunk_low
+
+    if features.head_above_paws_ratio is not None:
+        w = features.head_above_paws_conf
+        available_weight += w
+        r = features.head_above_paws_ratio
+        if r < 0.30:
+            scores["lying"] += 3.0 * w           # dominant lying signal
+        elif r > 0.55:
+            scores["sitting"] += 0.4 * w         # head high = not lying; weak vote
+            scores["standing"] += 0.4 * w
 
     if features.trunk_above_paws_ratio is not None:
         w = features.trunk_above_paws_conf
         available_weight += w
         r = features.trunk_above_paws_ratio
         if r < 0.20:
-            scores["lying"] += 2.5 * w           # strong, dominant signal
-        elif r < 0.45:
-            scores["sitting"] += 1.5 * w
+            scores["lying"] += 1.8 * w
+        elif r < 0.50:
+            scores["sitting"] += 1.2 * w
         else:
-            scores["standing"] += 1.5 * w
+            if body_low:
+                # Trunk says standing but head says lying — trust the head.
+                scores["lying"] += 0.5 * w
+            else:
+                scores["standing"] += 1.2 * w
 
     if features.back_knee_angle_deg is not None:
         w = features.back_knee_conf
-        available_weight += w
         ang = features.back_knee_angle_deg
         if ang < 110:
             scores["sitting"] += 1.5 * w
+            available_weight += w
         elif ang > 145:
-            # Don't let extended-knee push toward standing if trunk is on the ground
-            if not trunk_low:
+            if not body_low:
                 scores["standing"] += 1.5 * w
+                available_weight += w
         else:
-            scores["sitting"] += 0.4 * w
-            scores["standing"] += 0.4 * w
+            # Ambiguous mid-range: don't count this as evidence either way.
+            pass
 
     if features.spine_pitch_deg is not None:
-        w = features.spine_pitch_conf
-        available_weight += w
         p = features.spine_pitch_deg
-        if 15 < p < 60 and not trunk_low:
+        if 15 < p < 60 and not body_low:
+            w = features.spine_pitch_conf
             scores["sitting"] += 0.8 * w
+            available_weight += w
 
     if features.body_aspect_h_over_w is not None:
-        w = features.body_aspect_conf * 0.4   # de-weighted; viewpoint-fragile
-        available_weight += w
         ar = features.body_aspect_h_over_w
         if ar < 0.4:
+            w = features.body_aspect_conf * 0.4
             scores["lying"] += 0.6 * w
+            available_weight += w
 
     if available_weight < 0.5:
         return ("unknown", 0.0)

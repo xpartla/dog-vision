@@ -229,6 +229,21 @@ Try a different `--camera` index (0, 1, 2). On Windows with multiple cameras
 Weights come from HuggingFace; if your network is restricted, set
 `HF_HUB_OFFLINE=0` and ensure outbound HTTPS to `huggingface.co` works.
 
+**`process_video.py --video-adapt` fails with `CUDA error: out of memory`.**
+DLC's adaptation pass trains on full-resolution frames at batch size 8. On a
+6–12 GB consumer GPU this only fits at ≤1080p. Two fixes:
+
+```bash
+# Downscale once, then run inference + adapt on the smaller copy.
+# SuperAnimal crops + resizes internally anyway — no accuracy loss.
+ffmpeg -i samples/video2.mp4 -vf scale=1920:-2 samples/video2_1080p.mp4
+python process_video.py samples/video2_1080p.mp4 --video-adapt
+```
+
+Or skip `--video-adapt` and rely on the 1-Euro keypoint smoother in
+`classify_video.py` for jitter mitigation — it works at any resolution and
+costs nothing.
+
 ---
 
 ## 5. Not yet implemented
