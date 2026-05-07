@@ -3,6 +3,9 @@
 Real-time pose landmark detection on a dog (Australian Shepherd), built on
 SuperAnimal-Quadruped via DeepLabCut.
 
+> **Just want to run it?** See [HOWTO.md](HOWTO.md) for setup and the
+> per-workflow commands.
+
 ## Roadmap
 
 1. **MVP — pose landmark overlay** (current scope)
@@ -78,6 +81,33 @@ python live_webcam.py
 # Tweaks:
 python live_webcam.py --chunk-seconds 1.0 --model hrnet_w32
 ```
+
+### `classify_video.py` — phase 2: posture and head-tilt labels
+
+Reads the `.h5` predictions written by `process_video.py` and produces a new
+annotated video tagged with posture (sitting / standing / lying / unknown) and
+head tilt (upright / tilt_left / tilt_right / unknown). Rule-based geometry
+over keypoint angles, with sliding-window majority voting to suppress flicker.
+
+```bash
+# Auto-discovers output/<stem>*.h5
+python classify_video.py samples/Video1.mp4
+
+# Inspect the bodypart names DLC actually wrote (verify they match
+# the constants at the top of posture.py)
+python classify_video.py samples/Video1.mp4 --list-keypoints
+
+# Show per-feature numeric values on each frame for tuning
+python classify_video.py samples/Video1.mp4 --debug
+```
+
+Designed for the live-demo setup: tripod at ~ribcage height, slight downward
+tilt, dog free to face any direction. Features used (body H/W, back-knee
+angle, hip-above-paws, spine pitch, eye-line vs. head axis) are all relative
+geometry, not absolute pixel positions, so they survive dog rotation. When
+keypoints are occluded by Aussie fur, the missing features are simply skipped
+and the classifier votes with what it has — falling back to `unknown` rather
+than guessing if too few features survive.
 
 ## Path to true real-time
 

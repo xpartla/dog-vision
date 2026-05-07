@@ -33,3 +33,6 @@ samples/*.pickle
 # OS
 .DS_Store
 Thumbs.db
+
+# WSL2 surfaces Windows download metadata as :Zone.Identifier files
+*Zone.Identifier
