@@ -1,5 +1,6 @@
 """Phase-2 entry point: read DLC predictions for a video, classify posture
-and head tilt per frame, and write an annotated output video.
+and head tilt per frame, and write an annotated output video with the full
+keypoint overlay drawn on top.
 
 Run after `process_video.py` has produced an .h5 prediction file.
 
@@ -10,12 +11,14 @@ Examples:
     # Explicit predictions path
     python classify_video.py samples/Video1.mp4 --predictions output/Video1<scorer>.h5
 
-    # Print which keypoint names DLC actually wrote — useful if the
-    # constants in posture.py don't match your DLC version
+    # Print which keypoint names DLC actually wrote
     python classify_video.py samples/Video1.mp4 --list-keypoints
 
-    # Show debug overlay (per-feature values printed on each frame)
+    # Show debug overlay (per-feature numeric values)
     python classify_video.py samples/Video1.mp4 --debug
+
+    # Disable keypoint smoothing (e.g. to compare jitter before/after)
+    python classify_video.py samples/Video1.mp4 --no-smooth-keypoints
 """
 
 from __future__ import annotations
@@ -25,10 +28,11 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
-import numpy as np
 
+from overlay import draw_overlay
 from posture import (
     DEFAULT_CONFIDENCE_THRESHOLD,
+    KeypointSmoother,
     LabelSmoother,
     classify_head_tilt,
     classify_posture,
@@ -45,29 +49,6 @@ def find_predictions_h5(video: Path, predictions_dir: Path) -> Optional[Path]:
     return candidates[0] if candidates else None
 
 
-def _draw_label(frame: np.ndarray, text: str, origin: tuple[int, int],
-                color: tuple[int, int, int], scale: float = 0.7) -> None:
-    cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
-                (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
-                color, 1, cv2.LINE_AA)
-
-
-POSTURE_COLORS = {
-    "sitting": (0, 200, 255),    # amber
-    "standing": (0, 255, 0),     # green
-    "lying": (255, 100, 100),    # blue-ish
-    "unknown": (160, 160, 160),  # grey
-}
-
-HEAD_TILT_COLORS = {
-    "upright": (200, 200, 200),
-    "tilt_left": (0, 200, 255),
-    "tilt_right": (255, 100, 0),
-    "unknown": (160, 160, 160),
-}
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("video", type=Path, help="Path to the input video")
@@ -81,6 +62,12 @@ def main() -> None:
                         help="Minimum keypoint likelihood to consider a keypoint visible")
     parser.add_argument("--smooth-window", type=int, default=10,
                         help="Sliding-window size (frames) for label smoothing")
+    parser.add_argument("--no-smooth-keypoints", action="store_true",
+                        help="Disable 1-Euro smoothing of keypoint trajectories")
+    parser.add_argument("--smooth-mincutoff", type=float, default=1.0,
+                        help="1-Euro filter min cutoff Hz; lower = more smoothing")
+    parser.add_argument("--smooth-beta", type=float, default=0.5,
+                        help="1-Euro filter beta; higher = more responsive to fast motion")
     parser.add_argument("--list-keypoints", action="store_true",
                         help="Print the bodypart names found in the .h5 and exit")
     parser.add_argument("--debug", action="store_true",
@@ -105,8 +92,8 @@ def main() -> None:
         return
 
     print(f"Loading predictions from {h5_path}")
-    frames = load_keypoint_frames(h5_path, confidence_threshold=args.confidence)
-    print(f"  {len(frames)} frames")
+    raw_frames = load_keypoint_frames(h5_path, confidence_threshold=args.confidence)
+    print(f"  {len(raw_frames)} frames")
 
     cap = cv2.VideoCapture(str(args.video))
     if not cap.isOpened():
@@ -117,9 +104,9 @@ def main() -> None:
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     n_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    if n_video_frames != len(frames):
-        print(f"  warning: video has {n_video_frames} frames but predictions has {len(frames)}; "
-              f"will process min({n_video_frames}, {len(frames)})")
+    if n_video_frames != len(raw_frames):
+        print(f"  warning: video has {n_video_frames} frames but predictions has "
+              f"{len(raw_frames)}; will process min({n_video_frames}, {len(raw_frames)})")
 
     output = args.output or (args.predictions_dir / f"{args.video.stem}_posture.mp4")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -127,46 +114,38 @@ def main() -> None:
     writer = cv2.VideoWriter(str(output), cv2.VideoWriter_fourcc(*"mp4v"),
                              fps, (width, height))
 
+    kp_smoother: Optional[KeypointSmoother] = None
+    if not args.no_smooth_keypoints:
+        kp_smoother = KeypointSmoother(fps=fps,
+                                       mincutoff=args.smooth_mincutoff,
+                                       beta=args.smooth_beta)
     posture_smoother = LabelSmoother(window=args.smooth_window)
     head_tilt_smoother = LabelSmoother(window=args.smooth_window)
 
-    n = min(n_video_frames, len(frames))
+    n = min(n_video_frames, len(raw_frames))
     for i in range(n):
         ret, img = cap.read()
         if not ret:
             break
 
-        frame = frames[i]
+        frame = raw_frames[i]
+        if kp_smoother is not None:
+            frame = kp_smoother.smooth(frame)
+
         features = compute_posture_features(frame)
         raw_posture, posture_score = classify_posture(features)
         raw_tilt, tilt_angle = classify_head_tilt(frame)
 
-        posture = posture_smoother.push(raw_posture)
-        tilt = head_tilt_smoother.push(raw_tilt)
+        posture_label = posture_smoother.push(raw_posture)
+        tilt_label = head_tilt_smoother.push(raw_tilt)
 
-        _draw_label(img,
-                    f"posture: {posture} ({posture_score:.2f})",
-                    (12, 30),
-                    POSTURE_COLORS.get(posture, (255, 255, 255)),
-                    scale=0.8)
-        _draw_label(img,
-                    f"head:    {tilt} ({tilt_angle:+.0f} deg)",
-                    (12, 60),
-                    HEAD_TILT_COLORS.get(tilt, (255, 255, 255)),
-                    scale=0.8)
-
-        if args.debug:
-            lines = [
-                f"H/W:      {features.body_aspect_h_over_w:.2f}" if features.body_aspect_h_over_w is not None else "H/W:      -",
-                f"knee:     {features.back_knee_angle_deg:.0f} deg" if features.back_knee_angle_deg is not None else "knee:     -",
-                f"hip/spine:{features.hip_height_ratio:.2f}" if features.hip_height_ratio is not None else "hip/spine:-",
-                f"spine:    {features.spine_pitch_deg:+.0f} deg" if features.spine_pitch_deg is not None else "spine:    -",
-                f"raw post: {raw_posture}",
-                f"raw tilt: {raw_tilt}",
-            ]
-            for k, line in enumerate(lines):
-                _draw_label(img, line, (12, 100 + k * 22), (220, 220, 220), scale=0.55)
-
+        draw_overlay(
+            img,
+            frame,
+            posture=(posture_label, posture_score),
+            head_tilt=(tilt_label, tilt_angle),
+            debug_features=features if args.debug else None,
+        )
         writer.write(img)
 
     cap.release()

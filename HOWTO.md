@@ -43,10 +43,8 @@ the repo. Subsequent runs are instant-startup.
 |---|---|
 | Phase 1 only — keypoints on a recorded clip | [Workflow A](#workflow-a-process-a-recorded-video-phase-1-only) |
 | Phase 1 + 2 — keypoints **and** posture/head-tilt labels on a recorded clip | [Workflow B](#workflow-b-process-a-recorded-video-with-posture-classification) |
-| Phase 1 only — live webcam overlay | [Workflow C](#workflow-c-live-webcam-phase-1) |
+| Live webcam overlay (phase 1 + 2 by default) | [Workflow C](#workflow-c-live-webcam) |
 | Capture footage from the webcam, then process offline | [Workflow D](#workflow-d-record-then-process) |
-
-Phase-2 in the live webcam loop is not yet wired in — see [§5](#5-not-yet-implemented).
 
 ---
 
@@ -68,6 +66,10 @@ Useful flags:
 python process_video.py samples/myclip.mp4 \
     --model resnet_50 \           # faster but slightly less accurate than hrnet_w32 (default)
     --pcutoff 0.5                 # lower → draws more (noisier) keypoints; default 0.6
+
+# Reduce keypoint jitter at the cost of much longer runtime — recommended for
+# final renders, not for iterative tuning. Pairs well with `classify_video.py`.
+python process_video.py samples/myclip.mp4 --video-adapt
 ```
 
 ---
@@ -116,19 +118,30 @@ Other useful flags:
 ```bash
 python classify_video.py samples/myclip.mp4 \
     --confidence 0.6 \            # min keypoint likelihood to consider a keypoint "visible"
-    --smooth-window 15            # sliding-window size for label smoothing; bigger = stickier
+    --smooth-window 15 \          # sliding-window size for label smoothing; bigger = stickier
+    --no-smooth-keypoints \       # disable 1-Euro keypoint smoothing (compare jitter)
+    --smooth-mincutoff 1.5 \      # 1-Euro cutoff Hz; lower = smoother but laggier
+    --smooth-beta 0.5             # 1-Euro responsiveness; higher = tracks fast motion better
 ```
+
+The output video draws the full skeleton + keypoints + posture/tilt text
+labels. Run with `--debug` to also overlay the underlying feature values
+(body H/W, knee angle, trunk-above-paws ratio, spine pitch) so you can see
+which signal is voting for which posture and tune the thresholds in
+`posture.py` accordingly.
 
 ---
 
-### Workflow C: live webcam, phase 1
+### Workflow C: live webcam
 
 ```bash
 python live_webcam.py
 ```
 
-Captures ~1.5-second chunks from the camera, runs SuperAnimal on each, plays
-back the annotated chunk. Press **q** in the display window to quit.
+Captures ~1.5-second chunks from the camera, runs SuperAnimal, classifies
+posture and head tilt, plays back the chunk with the full overlay. Smoother
+state (1-Euro on keypoints, sliding-window on labels) persists across chunks
+for visual continuity. Press **q** in the display window to quit.
 
 Useful flags:
 
@@ -137,11 +150,18 @@ python live_webcam.py \
     --camera 0 \                  # OpenCV camera index; try 1, 2 if 0 is wrong
     --chunk-seconds 1.0 \         # smaller = lower latency, more inference overhead
     --model resnet_50 \           # faster than the default hrnet_w32
-    --pcutoff 0.5
+    --pcutoff 0.5 \
+    --no-posture \                # skip phase-2; just draw keypoints
+    --debug                       # overlay per-feature numeric values
 ```
 
 `--fps` is auto-detected from the camera with a fallback to 30; pass it
 explicitly only if the auto-detection picks something off.
+
+> Live mode does **not** support `--video-adapt` — the per-call adaptation
+> pass is too slow to fit inside a chunk. For jitter mitigation in live mode,
+> rely on the always-on 1-Euro keypoint smoother (tune with
+> `--smooth-mincutoff` / `--smooth-beta`).
 
 > **Windows + WSL2 note:** USB webcams aren't exposed inside WSL2 by default.
 > On the run-laptop, either run this script natively on Windows, or set up
@@ -213,10 +233,6 @@ Weights come from HuggingFace; if your network is restricted, set
 
 ## 5. Not yet implemented
 
-- **Phase 2 in the live loop.** `live_webcam.py` only draws keypoints; it
-  doesn't run the posture classifier on each chunk. Easy follow-up — the
-  classifier reads `.h5` data and a chunk produces one — but not wired in
-  yet.
 - **True frame-by-frame real-time.** `live_webcam.py` is chunked because
   the high-level DLC inference API loads the model from disk per call. A
   thin wrapper that keeps the model resident is the planned next step.

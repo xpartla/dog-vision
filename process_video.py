@@ -41,6 +41,13 @@ def main() -> None:
         default=0.6,
         help="Confidence threshold for drawing keypoints (default: 0.6)",
     )
+    parser.add_argument(
+        "--video-adapt",
+        action="store_true",
+        help="Fine-tune the model on the video using its own pseudo-labels. "
+             "Significantly reduces keypoint jitter at the cost of much longer "
+             "runtime. Recommended for final renders, not for iterative tuning.",
+    )
     args = parser.parse_args()
 
     if not args.video.exists():
@@ -55,6 +62,7 @@ def main() -> None:
         detector_name=args.detector,
         dest_folder=str(args.output_dir),
         pcutoff=args.pcutoff,
+        video_adapt=args.video_adapt,
     )
 
     print(f"\nDone. Annotated outputs in: {args.output_dir.resolve()}")
