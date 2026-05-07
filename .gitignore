@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.python-version
+
+# DeepLabCut / model caches (downloaded on first run; not part of the repo)
+.dlc/
+dlc-models/
+*.pth
+*.pt
+
+# Inference outputs
+output/
+
+# Test footage (commit deliberately with `git add -f` if needed)
+samples/*.mp4
+samples/*.mov
+samples/*.avi
+samples/*.mkv
+samples/*.h5
+samples/*.csv
+samples/*.pickle
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
