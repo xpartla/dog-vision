@@ -29,6 +29,7 @@ from posture import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     KeypointSmoother,
     LabelSmoother,
+    LearnedPostureClassifier,
     classify_head_tilt,
     classify_posture,
     compute_posture_features,
@@ -57,6 +58,9 @@ def main() -> None:
                         help="Disable 1-Euro smoothing of keypoint trajectories")
     parser.add_argument("--smooth-mincutoff", type=float, default=1.0)
     parser.add_argument("--smooth-beta", type=float, default=0.5)
+    parser.add_argument("--posture-model", type=Path, default=None,
+                        help="Trained posture model (.joblib). Uses the learned, "
+                             "viewpoint-robust classifier instead of the geometric rules.")
     parser.add_argument("--no-posture", action="store_true",
                         help="Skip phase-2 classification and just draw keypoints")
     parser.add_argument("--debug", action="store_true",
@@ -85,6 +89,16 @@ def main() -> None:
         f"({args.chunk_seconds}s @ {fps:.1f}fps, {fps_source}), {width}x{height}"
     )
     print("Press q in the display window to quit.")
+
+    posture_clf = None
+    if args.posture_model is not None:
+        if not args.posture_model.exists():
+            raise SystemExit(f"Posture model not found: {args.posture_model}")
+        posture_clf = LearnedPostureClassifier(args.posture_model)
+        if abs(posture_clf.confidence_threshold - args.confidence) > 1e-6:
+            args.confidence = posture_clf.confidence_threshold
+        print(f"Using learned posture model {args.posture_model} "
+              f"(confidence {args.confidence:.2f})")
 
     # Persistent smoothers — state carries across chunks for visual continuity.
     kp_smoother = None
@@ -169,7 +183,10 @@ def main() -> None:
                         features = None
                     else:
                         features = compute_posture_features(kpf)
-                        raw_p, score_p = classify_posture(features)
+                        if posture_clf is not None:
+                            raw_p, score_p = posture_clf.classify(kpf)
+                        else:
+                            raw_p, score_p = classify_posture(features)
                         raw_t, ang_t = classify_head_tilt(kpf)
                         posture = (posture_smoother.push(raw_p), score_p)
                         tilt = (tilt_smoother.push(raw_t), ang_t)

@@ -35,6 +35,7 @@ from posture import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     KeypointSmoother,
     LabelSmoother,
+    LearnedPostureClassifier,
     classify_head_tilt,
     classify_posture,
     compute_posture_features,
@@ -71,6 +72,10 @@ def main() -> None:
                         help="1-Euro filter beta; higher = more responsive to fast motion")
     parser.add_argument("--list-keypoints", action="store_true",
                         help="Print the bodypart names found in the .h5 and exit")
+    parser.add_argument("--posture-model", type=Path, default=None,
+                        help="Trained posture model (.joblib from train_posture.py). "
+                             "Uses the learned, viewpoint-robust classifier instead "
+                             "of the hand-tuned geometric rules.")
     parser.add_argument("--debug", action="store_true",
                         help="Overlay per-feature numeric values on each frame")
     parser.add_argument("--dump-features", type=Path, default=None,
@@ -94,6 +99,18 @@ def main() -> None:
         for n in names:
             print(f"  - {n}")
         return
+
+    posture_clf: Optional[LearnedPostureClassifier] = None
+    if args.posture_model is not None:
+        if not args.posture_model.exists():
+            raise SystemExit(f"Posture model not found: {args.posture_model}")
+        posture_clf = LearnedPostureClassifier(args.posture_model)
+        # Match the keypoint visibility threshold the model was trained with.
+        if abs(posture_clf.confidence_threshold - args.confidence) > 1e-6:
+            print(f"  using model's training confidence threshold "
+                  f"{posture_clf.confidence_threshold:.2f} (overrides --confidence)")
+            args.confidence = posture_clf.confidence_threshold
+        print(f"Using learned posture model {args.posture_model}")
 
     print(f"Loading predictions from {h5_path}")
     raw_frames = load_keypoint_frames(h5_path, confidence_threshold=args.confidence)
@@ -150,7 +167,10 @@ def main() -> None:
             frame = kp_smoother.smooth(frame)
 
         features = compute_posture_features(frame)
-        raw_posture, posture_score = classify_posture(features)
+        if posture_clf is not None:
+            raw_posture, posture_score = posture_clf.classify(frame)
+        else:
+            raw_posture, posture_score = classify_posture(features)
         raw_tilt, tilt_angle = classify_head_tilt(frame)
 
         posture_label = posture_smoother.push(raw_posture)

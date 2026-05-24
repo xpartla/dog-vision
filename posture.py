@@ -522,6 +522,58 @@ def classify_posture(features: PostureFeatures) -> tuple[str, float]:
     return (best, confidence)
 
 
+# === Learned posture classifier =============================================
+
+class LearnedPostureClassifier:
+    """Drop-in replacement for `classify_posture` backed by a trained model.
+
+    Loads a bundle saved by `train_posture.py` and classifies a Frame directly
+    from its viewpoint-robust feature vector (see `pose_features.py`), instead
+    of the hand-tuned geometric rules. Unlike the rule-based path it makes no
+    assumption about camera placement — it generalizes to whatever viewpoints
+    appeared in the training data.
+
+    Usage:
+        clf = LearnedPostureClassifier("posture_model.joblib")
+        label, prob = clf.classify(frame)
+    """
+
+    def __init__(self, model_path, min_proba: float = 0.5):
+        import joblib  # local import: only needed when a learned model is used
+
+        # Imported here (not at module top) to avoid a circular import:
+        # pose_features imports names from this module.
+        import pose_features as pf
+
+        bundle = joblib.load(model_path)
+        self._model = bundle["model"]
+        self._classes = list(bundle["classes"])
+        self._feature_names = list(bundle["feature_names"])
+        self.confidence_threshold = float(bundle.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD))
+        self.min_proba = min_proba
+        self._pf = pf
+
+        if len(self._feature_names) != pf.N_FEATURES:
+            raise ValueError(
+                f"Model expects {len(self._feature_names)} features but the current "
+                f"pose_features produces {pf.N_FEATURES}. The feature definition "
+                f"changed since training — retrain with build_dataset.py/train_posture.py."
+            )
+
+    def classify(self, frame: "Frame") -> tuple[str, float]:
+        """Return (label, probability). 'unknown' if too few keypoints or the
+        top class probability is below `min_proba`."""
+        vec = self._pf.feature_vector(frame)
+        if vec is None:
+            return ("unknown", 0.0)
+        proba = self._model.predict_proba(vec.reshape(1, -1))[0]
+        best = int(np.argmax(proba))
+        label, p = self._classes[best], float(proba[best])
+        if p < self.min_proba:
+            return ("unknown", p)
+        return (label, p)
+
+
 # === Head tilt ==============================================================
 
 HEAD_TILT_LABELS = ("upright", "tilt_left", "tilt_right", "unknown")
