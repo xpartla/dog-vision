@@ -138,10 +138,11 @@ def draw_overlay(
         lines = [
             f"H/W:        {f.body_aspect_h_over_w:.2f}" if f.body_aspect_h_over_w is not None else "H/W:        -",
             f"knee:       {f.back_knee_angle_deg:.0f} deg" if f.back_knee_angle_deg is not None else "knee:       -",
-            f"head/paws:  {f.head_above_paws_ratio:.2f}" if f.head_above_paws_ratio is not None else "head/paws:  -",
-            f"trunk/paws: {f.trunk_above_paws_ratio:.2f}" if f.trunk_above_paws_ratio is not None else "trunk/paws: -",
-            f"hip/paws:   {f.hip_above_paws_ratio:.2f}" if f.hip_above_paws_ratio is not None else "hip/paws:   -",
+            f"head/grnd:  {f.head_above_ground_ratio:.2f}" if f.head_above_ground_ratio is not None else "head/grnd:  -",
+            f"trunk/grnd: {f.trunk_above_ground_ratio:.2f}" if f.trunk_above_ground_ratio is not None else "trunk/grnd: -",
+            f"hip/grnd:   {f.hip_above_ground_ratio:.2f}" if f.hip_above_ground_ratio is not None else "hip/grnd:   -",
             f"spine:      {f.spine_pitch_deg:+.0f} deg" if f.spine_pitch_deg is not None else "spine:      -",
+            f"ground:     {'paw' if f.ground_from_paws else 'kp'}",
         ]
         for k, line in enumerate(lines):
             _draw_text(image, line, (12, 100 + k * 22), (220, 220, 220), scale=0.55)

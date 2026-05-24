@@ -24,6 +24,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
 from typing import Optional
 
@@ -72,6 +73,9 @@ def main() -> None:
                         help="Print the bodypart names found in the .h5 and exit")
     parser.add_argument("--debug", action="store_true",
                         help="Overlay per-feature numeric values on each frame")
+    parser.add_argument("--dump-features", type=Path, default=None,
+                        help="Write per-frame feature values + labels to a CSV "
+                             "for tuning the classifier thresholds on real footage")
     args = parser.parse_args()
 
     if not args.video.exists():
@@ -122,6 +126,19 @@ def main() -> None:
     posture_smoother = LabelSmoother(window=args.smooth_window)
     head_tilt_smoother = LabelSmoother(window=args.smooth_window)
 
+    dump_writer = None
+    dump_file = None
+    if args.dump_features is not None:
+        args.dump_features.parent.mkdir(parents=True, exist_ok=True)
+        dump_file = args.dump_features.open("w", newline="")
+        dump_writer = csv.writer(dump_file)
+        dump_writer.writerow([
+            "frame", "posture_raw", "posture_smoothed", "posture_score",
+            "head_above_ground", "trunk_above_ground", "hip_above_ground",
+            "spine_pitch_deg", "back_knee_deg", "body_aspect_hw",
+            "ground_from_paws", "tilt_raw", "tilt_deg",
+        ])
+
     n = min(n_video_frames, len(raw_frames))
     for i in range(n):
         ret, img = cap.read()
@@ -139,6 +156,20 @@ def main() -> None:
         posture_label = posture_smoother.push(raw_posture)
         tilt_label = head_tilt_smoother.push(raw_tilt)
 
+        if dump_writer is not None:
+            fmt = lambda v: "" if v is None else round(v, 4)
+            dump_writer.writerow([
+                i, raw_posture, posture_label, round(posture_score, 4),
+                fmt(features.head_above_ground_ratio),
+                fmt(features.trunk_above_ground_ratio),
+                fmt(features.hip_above_ground_ratio),
+                fmt(features.spine_pitch_deg),
+                fmt(features.back_knee_angle_deg),
+                fmt(features.body_aspect_h_over_w),
+                int(features.ground_from_paws),
+                raw_tilt, round(tilt_angle, 2),
+            ])
+
         draw_overlay(
             img,
             frame,
@@ -150,6 +181,9 @@ def main() -> None:
 
     cap.release()
     writer.release()
+    if dump_file is not None:
+        dump_file.close()
+        print(f"Wrote feature dump {args.dump_features.resolve()}")
 
     print(f"Wrote {output.resolve()}")
 
