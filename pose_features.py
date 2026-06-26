@@ -68,16 +68,44 @@ COORD_KEYPOINTS: tuple[str, ...] = (
 
 # Joint-angle triplets (vertex is the middle point). Angles are translation,
 # scale and rotation invariant — the most viewpoint-robust signal available.
+# Order is frozen — append, never reorder.
 ANGLE_TRIPLETS: tuple[tuple[str, str, str], ...] = (
-    (KP_BACK_LEFT_THIGH, KP_BACK_LEFT_KNEE, KP_BACK_LEFT_PAW),     # L hind stifle
-    (KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE, KP_BACK_RIGHT_PAW),  # R hind stifle
-    (KP_FRONT_LEFT_THIGH, KP_FRONT_LEFT_KNEE, KP_FRONT_LEFT_PAW),  # L fore
-    (KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE, KP_FRONT_RIGHT_PAW),  # R fore
-    (KP_NECK_BASE, KP_BACK_BASE, KP_BACK_MIDDLE),                  # spine bend front
-    (KP_BACK_BASE, KP_BACK_MIDDLE, KP_BACK_END),                  # spine bend rear
-    (KP_NECK_BASE, KP_BACK_MIDDLE, KP_TAIL_BASE),                 # spine overall
-    (KP_NOSE, KP_NECK_BASE, KP_BACK_BASE),                        # neck/head angle
+    # Original 8
+    (KP_BACK_LEFT_THIGH,  KP_BACK_LEFT_KNEE,   KP_BACK_LEFT_PAW),      # L hind stifle
+    (KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE,  KP_BACK_RIGHT_PAW),     # R hind stifle
+    (KP_FRONT_LEFT_THIGH, KP_FRONT_LEFT_KNEE,  KP_FRONT_LEFT_PAW),     # L fore
+    (KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE, KP_FRONT_RIGHT_PAW),   # R fore
+    (KP_NECK_BASE,        KP_BACK_BASE,         KP_BACK_MIDDLE),        # spine bend front
+    (KP_BACK_BASE,        KP_BACK_MIDDLE,       KP_BACK_END),           # spine bend rear
+    (KP_NECK_BASE,        KP_BACK_MIDDLE,       KP_TAIL_BASE),          # spine overall
+    (KP_NOSE,             KP_NECK_BASE,         KP_BACK_BASE),          # neck/head angle
+    # New: hip angles (thigh as vertex, spine-end and knee as endpoints)
+    (KP_BACK_END,         KP_BACK_LEFT_THIGH,  KP_BACK_LEFT_KNEE),     # L hip
+    (KP_BACK_END,         KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE),    # R hip
+    # New: shoulder angles (front thigh as vertex)
+    (KP_BACK_BASE,        KP_FRONT_LEFT_THIGH,  KP_FRONT_LEFT_KNEE),   # L shoulder
+    (KP_BACK_BASE,        KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE),  # R shoulder
+    # New: tail carriage angle
+    (KP_BACK_END,         KP_TAIL_BASE,         KP_TAIL_END),           # tail
 )
+
+# Normalized pairwise distances: (name, kp1, kp2).
+# Computed as dist(kp1, kp2) / scale — each yields (dist, valid).
+# All entries are L/R-symmetric so no swap is needed in flip_feature_vector.
+DIST_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("front_paw_spread", KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW),
+    ("back_paw_spread",  KP_BACK_LEFT_PAW,  KP_BACK_RIGHT_PAW),
+)
+
+# Belly-to-paw: average distance from belly_bottom to visible paws in each pair.
+# Yields (dist/scale, valid). Small value = belly near paws = likely lying.
+_BELLY_FRONT_PAWS = (KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW)
+_BELLY_BACK_PAWS  = (KP_BACK_LEFT_PAW,  KP_BACK_RIGHT_PAW)
+
+# Spine bow: perpendicular deviation of back_middle from the neck_base→tail_base
+# chord, normalized by chord length. Captures spine curvature independent of
+# camera angle — a lying dog's spine projects flat; a sitting dog's bows.
+_SPINE_BOW_KPS = (KP_NECK_BASE, KP_BACK_MIDDLE, KP_TAIL_BASE)
 
 # Left/right keypoint pairs, used to mirror a feature vector for flip augmentation.
 _LR_PAIRS: tuple[tuple[str, str], ...] = (
@@ -99,6 +127,11 @@ def _build_feature_names() -> list[str]:
         names += [f"{kp}.x", f"{kp}.y", f"{kp}.vis"]
     for a, b, c in ANGLE_TRIPLETS:
         names += [f"ang_{b}", f"ang_{b}.valid"]
+    for name, kp1, kp2 in DIST_PAIRS:
+        names += [name, f"{name}.valid"]
+    names += ["belly_front_paw_dist", "belly_front_paw_dist.valid"]
+    names += ["belly_back_paw_dist",  "belly_back_paw_dist.valid"]
+    names += ["spine_bow", "spine_bow.valid"]
     names += ["bbox_aspect_hw", "n_visible_frac"]
     return names
 
@@ -125,6 +158,8 @@ def feature_vector(frame: Frame) -> Optional[np.ndarray]:
         return None
 
     feats: list[float] = []
+
+    # --- Normalized keypoint coordinates ---
     for kp_name in COORD_KEYPOINTS:
         kp = frame.get(kp_name)
         if kp is None:
@@ -132,6 +167,7 @@ def feature_vector(frame: Frame) -> Optional[np.ndarray]:
         else:
             feats += [(kp.x - cx) / scale, (kp.y - cy) / scale, 1.0]
 
+    # --- Joint angles ---
     for a_name, b_name, c_name in ANGLE_TRIPLETS:
         a, b, c = frame.get(a_name), frame.get(b_name), frame.get(c_name)
         if a and b and c:
@@ -143,6 +179,41 @@ def feature_vector(frame: Frame) -> Optional[np.ndarray]:
         else:
             feats += [0.0, 0.0]
 
+    # --- Normalized pairwise distances ---
+    for _name, kp1_name, kp2_name in DIST_PAIRS:
+        kp1, kp2 = frame.get(kp1_name), frame.get(kp2_name)
+        if kp1 and kp2:
+            d = math.hypot(kp1.x - kp2.x, kp1.y - kp2.y) / scale
+            feats += [d, 1.0]
+        else:
+            feats += [0.0, 0.0]
+
+    # --- Belly-to-paw average distances ---
+    belly = frame.get(KP_BELLY_BOTTOM)
+    for paw_names in (_BELLY_FRONT_PAWS, _BELLY_BACK_PAWS):
+        visible_paws = [frame.get(k) for k in paw_names if frame.get(k)]
+        if belly and visible_paws:
+            dists = [math.hypot(belly.x - p.x, belly.y - p.y) / scale
+                     for p in visible_paws]
+            feats += [float(np.mean(dists)), 1.0]
+        else:
+            feats += [0.0, 0.0]
+
+    # --- Spine bow ---
+    p1, pm, p2 = (frame.get(k) for k in _SPINE_BOW_KPS)
+    if p1 and pm and p2:
+        chord_x = p2.x - p1.x
+        chord_y = p2.y - p1.y
+        chord = math.hypot(chord_x, chord_y)
+        if chord > 1e-3:
+            bow = abs(chord_x * (p1.y - pm.y) - chord_y * (p1.x - pm.x)) / chord
+            feats += [bow / scale, 1.0]
+        else:
+            feats += [0.0, 0.0]
+    else:
+        feats += [0.0, 0.0]
+
+    # --- Global shape ---
     w = float(xs.max() - xs.min())
     h = float(ys.max() - ys.min())
     feats.append(h / w if w > 1e-3 else 0.0)
@@ -159,10 +230,12 @@ def _build_flip_index() -> np.ndarray:
         for suf in (".x", ".y", ".vis"):
             swap[name_to_idx[f"{l}{suf}"]] = name_to_idx[f"{r}{suf}"]
             swap[name_to_idx[f"{r}{suf}"]] = name_to_idx[f"{l}{suf}"]
-    # Angle features: swap the left/right limb angles too.
+    # Angle features: swap left/right limb angles.
     angle_lr = {
-        f"ang_{KP_BACK_LEFT_KNEE}": f"ang_{KP_BACK_RIGHT_KNEE}",
-        f"ang_{KP_FRONT_LEFT_KNEE}": f"ang_{KP_FRONT_RIGHT_KNEE}",
+        f"ang_{KP_BACK_LEFT_KNEE}":   f"ang_{KP_BACK_RIGHT_KNEE}",
+        f"ang_{KP_FRONT_LEFT_KNEE}":  f"ang_{KP_FRONT_RIGHT_KNEE}",
+        f"ang_{KP_BACK_LEFT_THIGH}":  f"ang_{KP_BACK_RIGHT_THIGH}",   # hip
+        f"ang_{KP_FRONT_LEFT_THIGH}": f"ang_{KP_FRONT_RIGHT_THIGH}",  # shoulder
     }
     for ln, rn in angle_lr.items():
         for suf in ("", ".valid"):

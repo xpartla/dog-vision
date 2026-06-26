@@ -56,6 +56,12 @@ def main() -> None:
              "the detector training on a 6-12 GB GPU. Try 1 or 2 if you hit "
              "CUDA out-of-memory during --video-adapt.",
     )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="Device for inference: 'auto' (default, uses GPU if available), "
+             "'cpu', or 'cuda'. Use 'cpu' if CUDA causes a segfault.",
+    )
     args = parser.parse_args()
 
     if not args.video.exists():
@@ -75,6 +81,7 @@ def main() -> None:
         dest_folder=str(args.output_dir),
         pcutoff=args.pcutoff,
         video_adapt=args.video_adapt,
+        device=args.device,
         **extra_kwargs,
     )
 

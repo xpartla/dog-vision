@@ -36,7 +36,7 @@ def build_model(kind: str):
         return Pipeline([
             ("scale", StandardScaler()),
             ("mlp", MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=600,
-                                  early_stopping=True, random_state=0)),
+                                  random_state=0)),
         ])
     raise ValueError(f"unknown model kind: {kind}")
 
