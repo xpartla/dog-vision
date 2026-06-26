@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -132,7 +134,8 @@ def main() -> None:
     output = args.output or (args.predictions_dir / f"{args.video.stem}_posture.mp4")
     output.parent.mkdir(parents=True, exist_ok=True)
 
-    writer = cv2.VideoWriter(str(output), cv2.VideoWriter_fourcc(*"mp4v"),
+    tmp_output = Path(tempfile.mktemp(suffix=".avi"))
+    writer = cv2.VideoWriter(str(tmp_output), cv2.VideoWriter_fourcc(*"MJPG"),
                              fps, (width, height))
 
     kp_smoother: Optional[KeypointSmoother] = None
@@ -205,6 +208,13 @@ def main() -> None:
         dump_file.close()
         print(f"Wrote feature dump {args.dump_features.resolve()}")
 
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(tmp_output),
+         "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output)],
+        check=True,
+    )
+    tmp_output.unlink()
     print(f"Wrote {output.resolve()}")
 
 

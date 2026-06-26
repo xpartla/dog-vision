@@ -89,15 +89,24 @@ def _kp_color(name: str) -> tuple[int, int, int]:
 
 def _draw_text(image: np.ndarray, text: str, origin: tuple[int, int],
                color: tuple[int, int, int], scale: float = 0.7) -> None:
+    thickness = max(2, round(_scale(image, 2)))
+    shadow = max(4, round(_scale(image, 6)))
     cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
-                (0, 0, 0), 4, cv2.LINE_AA)
+                (0, 0, 0), shadow, cv2.LINE_AA)
     cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
-                color, 1, cv2.LINE_AA)
+                color, thickness, cv2.LINE_AA)
+
+
+def _scale(image: np.ndarray, base: float, base_height: int = 720) -> float:
+    """Scale a size proportionally to image height relative to a 720p baseline."""
+    return base * image.shape[0] / base_height
 
 
 def draw_skeleton(image: np.ndarray, frame: Frame,
                   edge_thickness: int = 2, point_radius: int = 4) -> None:
     """Draw skeleton edges and keypoints from a Frame onto the image (in place)."""
+    thickness = max(1, round(_scale(image, edge_thickness)))
+    radius = max(2, round(_scale(image, point_radius)))
     for k1, k2, color in SKELETON_EDGES:
         p1 = frame.get(k1)
         p2 = frame.get(k2)
@@ -106,13 +115,13 @@ def draw_skeleton(image: np.ndarray, frame: Frame,
         cv2.line(image,
                  (int(p1.x), int(p1.y)),
                  (int(p2.x), int(p2.y)),
-                 color, edge_thickness, cv2.LINE_AA)
+                 color, thickness, cv2.LINE_AA)
 
     for name, kp in frame.visible().items():
         color = _kp_color(name)
         center = (int(kp.x), int(kp.y))
-        cv2.circle(image, center, point_radius, color, -1, cv2.LINE_AA)
-        cv2.circle(image, center, point_radius, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.circle(image, center, radius, color, -1, cv2.LINE_AA)
+        cv2.circle(image, center, radius, (0, 0, 0), 1, cv2.LINE_AA)
 
 
 def draw_overlay(
@@ -126,15 +135,23 @@ def draw_overlay(
     if frame is not None:
         draw_skeleton(image, frame)
 
+    font_scale = _scale(image, 0.8)
+    line_gap = max(30, round(_scale(image, 30)))
+    margin = max(12, round(_scale(image, 12)))
+
     p_label, p_score = posture
     t_label, t_angle = head_tilt
-    _draw_text(image, f"posture: {p_label} ({p_score:.2f})", (12, 30),
-               POSTURE_COLORS.get(p_label, (255, 255, 255)), scale=0.8)
-    _draw_text(image, f"head:    {t_label} ({t_angle:+.0f} deg)", (12, 60),
-               HEAD_TILT_COLORS.get(t_label, (255, 255, 255)), scale=0.8)
+    _draw_text(image, f"posture: {p_label} ({p_score:.2f})",
+               (margin, line_gap),
+               POSTURE_COLORS.get(p_label, (255, 255, 255)), scale=font_scale)
+    _draw_text(image, f"head:    {t_label} ({t_angle:+.0f} deg)",
+               (margin, line_gap * 2),
+               HEAD_TILT_COLORS.get(t_label, (255, 255, 255)), scale=font_scale)
 
     if debug_features is not None:
         f = debug_features
+        debug_scale = _scale(image, 0.55)
+        debug_gap = max(22, round(_scale(image, 22)))
         lines = [
             f"H/W:        {f.body_aspect_h_over_w:.2f}" if f.body_aspect_h_over_w is not None else "H/W:        -",
             f"knee:       {f.back_knee_angle_deg:.0f} deg" if f.back_knee_angle_deg is not None else "knee:       -",
@@ -145,4 +162,5 @@ def draw_overlay(
             f"ground:     {'paw' if f.ground_from_paws else 'kp'}",
         ]
         for k, line in enumerate(lines):
-            _draw_text(image, line, (12, 100 + k * 22), (220, 220, 220), scale=0.55)
+            _draw_text(image, line, (margin, line_gap * 3 + k * debug_gap),
+                       (220, 220, 220), scale=debug_scale)
