@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional
 
 import cv2
+import numpy as np
 
 from overlay import draw_overlay
 from posture import (
@@ -83,6 +85,10 @@ def main() -> None:
     parser.add_argument("--dump-features", type=Path, default=None,
                         help="Write per-frame feature values + labels to a CSV "
                              "for tuning the classifier thresholds on real footage")
+    parser.add_argument("--rerender", action="store_true",
+                        help="Skip classification; reload labels from the sidecar JSON "
+                             "saved by a previous run and re-render the overlay only. "
+                             "Much faster than a full re-run when only overlay visuals changed.")
     args = parser.parse_args()
 
     if not args.video.exists():
@@ -114,107 +120,142 @@ def main() -> None:
             args.confidence = posture_clf.confidence_threshold
         print(f"Using learned posture model {args.posture_model}")
 
+    output = args.output or (args.predictions_dir / f"{args.video.stem}_posture.mp4")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    labels_cache = output.with_suffix(".labels.json")
+
     print(f"Loading predictions from {h5_path}")
     raw_frames = load_keypoint_frames(h5_path, confidence_threshold=args.confidence)
     print(f"  {len(raw_frames)} frames")
 
+    # --- probe video dimensions without decoding all frames ---
     cap = cv2.VideoCapture(str(args.video))
     if not cap.isOpened():
         raise SystemExit(f"Could not open video {args.video}")
-
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     n_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
 
     if n_video_frames != len(raw_frames):
         print(f"  warning: video has {n_video_frames} frames but predictions has "
               f"{len(raw_frames)}; will process min({n_video_frames}, {len(raw_frames)})")
 
-    output = args.output or (args.predictions_dir / f"{args.video.stem}_posture.mp4")
-    output.parent.mkdir(parents=True, exist_ok=True)
+    n = min(n_video_frames, len(raw_frames))
 
-    tmp_output = Path(tempfile.mktemp(suffix=".avi"))
-    writer = cv2.VideoWriter(str(tmp_output), cv2.VideoWriter_fourcc(*"MJPG"),
-                             fps, (width, height))
-
+    # --- build per-frame smoothed keypoints (always fast) ---
     kp_smoother: Optional[KeypointSmoother] = None
     if not args.no_smooth_keypoints:
         kp_smoother = KeypointSmoother(fps=fps,
                                        mincutoff=args.smooth_mincutoff,
                                        beta=args.smooth_beta)
-    posture_smoother = LabelSmoother(window=args.smooth_window)
-    head_tilt_smoother = LabelSmoother(window=args.smooth_window)
-
-    dump_writer = None
-    dump_file = None
-    if args.dump_features is not None:
-        args.dump_features.parent.mkdir(parents=True, exist_ok=True)
-        dump_file = args.dump_features.open("w", newline="")
-        dump_writer = csv.writer(dump_file)
-        dump_writer.writerow([
-            "frame", "posture_raw", "posture_smoothed", "posture_score",
-            "head_above_ground", "trunk_above_ground", "hip_above_ground",
-            "spine_pitch_deg", "back_knee_deg", "body_aspect_hw",
-            "ground_from_paws", "tilt_raw", "tilt_deg",
-        ])
-
-    n = min(n_video_frames, len(raw_frames))
+    smoothed_frames = []
     for i in range(n):
-        ret, img = cap.read()
-        if not ret:
-            break
-
         frame = raw_frames[i]
         if kp_smoother is not None:
             frame = kp_smoother.smooth(frame)
+        smoothed_frames.append(frame)
 
-        features = compute_posture_features(frame)
-        if posture_clf is not None:
-            raw_posture, posture_score = posture_clf.classify(frame)
-        else:
-            raw_posture, posture_score = classify_posture(features)
-        raw_tilt, tilt_angle = classify_head_tilt(frame)
-
-        posture_label = posture_smoother.push(raw_posture)
-        tilt_label = head_tilt_smoother.push(raw_tilt)
-
-        if dump_writer is not None:
-            fmt = lambda v: "" if v is None else round(v, 4)
+    # --- classification: load from cache or run ---
+    if args.rerender:
+        if not labels_cache.exists():
+            raise SystemExit(
+                f"No labels cache found at {labels_cache}. "
+                "Run without --rerender first to generate it."
+            )
+        print(f"Rerender mode: loading labels from {labels_cache}")
+        rows = json.loads(labels_cache.read_text())
+        per_frame_labels = [
+            (r["posture_label"], r["posture_score"], r["tilt_label"], r["tilt_angle"])
+            for r in rows
+        ]
+    else:
+        posture_smoother = LabelSmoother(window=args.smooth_window)
+        head_tilt_smoother = LabelSmoother(window=args.smooth_window)
+        dump_writer = None
+        dump_file = None
+        if args.dump_features is not None:
+            args.dump_features.parent.mkdir(parents=True, exist_ok=True)
+            dump_file = args.dump_features.open("w", newline="")
+            dump_writer = csv.writer(dump_file)
             dump_writer.writerow([
-                i, raw_posture, posture_label, round(posture_score, 4),
-                fmt(features.head_above_ground_ratio),
-                fmt(features.trunk_above_ground_ratio),
-                fmt(features.hip_above_ground_ratio),
-                fmt(features.spine_pitch_deg),
-                fmt(features.back_knee_angle_deg),
-                fmt(features.body_aspect_h_over_w),
-                int(features.ground_from_paws),
-                raw_tilt, round(tilt_angle, 2),
+                "frame", "posture_raw", "posture_smoothed", "posture_score",
+                "head_above_ground", "trunk_above_ground", "hip_above_ground",
+                "spine_pitch_deg", "back_knee_deg", "body_aspect_hw",
+                "ground_from_paws", "tilt_raw", "tilt_deg",
             ])
 
+        per_frame_labels = []
+        for i, frame in enumerate(smoothed_frames):
+            features = compute_posture_features(frame)
+            if posture_clf is not None:
+                raw_posture, posture_score = posture_clf.classify(frame)
+            else:
+                raw_posture, posture_score = classify_posture(features)
+            raw_tilt, tilt_angle = classify_head_tilt(frame)
+            posture_label = posture_smoother.push(raw_posture)
+            tilt_label = head_tilt_smoother.push(raw_tilt)
+            per_frame_labels.append((posture_label, posture_score, tilt_label, tilt_angle))
+
+            if dump_writer is not None:
+                fmt = lambda v: "" if v is None else round(v, 4)
+                dump_writer.writerow([
+                    i, raw_posture, posture_label, round(posture_score, 4),
+                    fmt(features.head_above_ground_ratio),
+                    fmt(features.trunk_above_ground_ratio),
+                    fmt(features.hip_above_ground_ratio),
+                    fmt(features.spine_pitch_deg),
+                    fmt(features.back_knee_angle_deg),
+                    fmt(features.body_aspect_h_over_w),
+                    int(features.ground_from_paws),
+                    raw_tilt, round(tilt_angle, 2),
+                ])
+
+        if dump_file is not None:
+            dump_file.close()
+            print(f"Wrote feature dump {args.dump_features.resolve()}")
+
+        labels_cache.write_text(json.dumps([
+            {"posture_label": pl, "posture_score": ps, "tilt_label": tl, "tilt_angle": ta}
+            for pl, ps, tl, ta in per_frame_labels
+        ]))
+        print(f"Saved labels cache → {labels_cache}")
+
+    # --- render: decode with ffmpeg pipe, encode directly to H.264 ---
+    frame_bytes = width * height * 3
+    decode = subprocess.Popen(
+        ["ffmpeg", "-i", str(args.video), "-f", "rawvideo", "-pix_fmt", "bgr24",
+         "-vframes", str(n), "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    encode = subprocess.Popen(
+        ["ffmpeg", "-y",
+         "-f", "rawvideo", "-pix_fmt", "bgr24",
+         "-s", f"{width}x{height}", "-r", str(fps), "-i", "pipe:0",
+         "-c:v", "libx264", "-crf", "23", "-preset", "fast",
+         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output)],
+        stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+
+    for i, (frame, (posture_label, posture_score, tilt_label, tilt_angle)) in \
+            enumerate(zip(smoothed_frames, per_frame_labels)):
+        raw = decode.stdout.read(frame_bytes)
+        if len(raw) < frame_bytes:
+            break
+        img = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3)).copy()
         draw_overlay(
-            img,
-            frame,
+            img, frame,
             posture=(posture_label, posture_score),
             head_tilt=(tilt_label, tilt_angle),
-            debug_features=features if args.debug else None,
+            debug_features=None,
         )
-        writer.write(img)
+        encode.stdin.write(img.tobytes())
 
-    cap.release()
-    writer.release()
-    if dump_file is not None:
-        dump_file.close()
-        print(f"Wrote feature dump {args.dump_features.resolve()}")
-
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", str(tmp_output),
-         "-c:v", "libx264", "-crf", "23", "-preset", "medium",
-         "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output)],
-        check=True,
-    )
-    tmp_output.unlink()
+    encode.stdin.close()
+    encode.wait()
+    decode.stdout.close()
+    decode.wait()
     print(f"Wrote {output.resolve()}")
 
 

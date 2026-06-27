@@ -89,7 +89,7 @@ def _kp_color(name: str) -> tuple[int, int, int]:
 
 def _draw_text(image: np.ndarray, text: str, origin: tuple[int, int],
                color: tuple[int, int, int], scale: float = 0.7) -> None:
-    thickness = max(2, round(_scale(image, 2)))
+    thickness = max(2, round(_scale(image, 3)))
     shadow = max(4, round(_scale(image, 6)))
     cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
                 (0, 0, 0), shadow, cv2.LINE_AA)
@@ -106,7 +106,7 @@ def draw_skeleton(image: np.ndarray, frame: Frame,
                   edge_thickness: int = 2, point_radius: int = 4) -> None:
     """Draw skeleton edges and keypoints from a Frame onto the image (in place)."""
     thickness = max(1, round(_scale(image, edge_thickness)))
-    radius = max(2, round(_scale(image, point_radius)))
+    radius = max(1, round(_scale(image, point_radius / 2)))
     for k1, k2, color in SKELETON_EDGES:
         p1 = frame.get(k1)
         p2 = frame.get(k2)
