@@ -24,13 +24,13 @@ from pathlib import Path
 import cv2
 import deeplabcut
 
+from orientation import estimate_orientation
 from overlay import draw_overlay
 from posture import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     KeypointSmoother,
     LabelSmoother,
     LearnedPostureClassifier,
-    classify_head_tilt,
     classify_posture,
     compute_posture_features,
     load_keypoint_frames,
@@ -107,7 +107,6 @@ def main() -> None:
                                        mincutoff=args.smooth_mincutoff,
                                        beta=args.smooth_beta)
     posture_smoother = LabelSmoother(window=args.smooth_window)
-    tilt_smoother = LabelSmoother(window=args.smooth_window)
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
@@ -179,23 +178,22 @@ def main() -> None:
 
                     if args.no_posture or kpf is None:
                         posture = ("unknown", 0.0)
-                        tilt = ("unknown", 0.0)
                         features = None
+                        orientation = None
                     else:
                         features = compute_posture_features(kpf)
                         if posture_clf is not None:
                             raw_p, score_p = posture_clf.classify(kpf)
                         else:
                             raw_p, score_p = classify_posture(features)
-                        raw_t, ang_t = classify_head_tilt(kpf)
+                        orientation = estimate_orientation(kpf)
                         posture = (posture_smoother.push(raw_p), score_p)
-                        tilt = (tilt_smoother.push(raw_t), ang_t)
 
                     draw_overlay(
                         img,
                         kpf,
                         posture=posture,
-                        head_tilt=tilt,
+                        orientation=orientation,
                         debug_features=features if args.debug else None,
                     )
 

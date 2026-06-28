@@ -34,13 +34,13 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from orientation import estimate_orientation
 from overlay import draw_overlay
 from posture import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     KeypointSmoother,
     LabelSmoother,
     LearnedPostureClassifier,
-    classify_head_tilt,
     classify_posture,
     compute_posture_features,
     list_keypoint_names,
@@ -167,12 +167,11 @@ def main() -> None:
         print(f"Rerender mode: loading labels from {labels_cache}")
         rows = json.loads(labels_cache.read_text())
         per_frame_labels = [
-            (r["posture_label"], r["posture_score"], r["tilt_label"], r["tilt_angle"])
+            (r["posture_label"], r["posture_score"])
             for r in rows
         ]
     else:
         posture_smoother = LabelSmoother(window=args.smooth_window)
-        head_tilt_smoother = LabelSmoother(window=args.smooth_window)
         dump_writer = None
         dump_file = None
         if args.dump_features is not None:
@@ -183,7 +182,8 @@ def main() -> None:
                 "frame", "posture_raw", "posture_smoothed", "posture_score",
                 "head_above_ground", "trunk_above_ground", "hip_above_ground",
                 "spine_pitch_deg", "back_knee_deg", "body_aspect_hw",
-                "ground_from_paws", "tilt_raw", "tilt_deg",
+                "ground_from_paws",
+                "orient_spine_deg", "orient_bilateral_conf", "orient_confidence",
             ])
 
         per_frame_labels = []
@@ -193,12 +193,11 @@ def main() -> None:
                 raw_posture, posture_score = posture_clf.classify(frame)
             else:
                 raw_posture, posture_score = classify_posture(features)
-            raw_tilt, tilt_angle = classify_head_tilt(frame)
             posture_label = posture_smoother.push(raw_posture)
-            tilt_label = head_tilt_smoother.push(raw_tilt)
-            per_frame_labels.append((posture_label, posture_score, tilt_label, tilt_angle))
+            per_frame_labels.append((posture_label, posture_score))
 
             if dump_writer is not None:
+                orientation = estimate_orientation(frame)
                 fmt = lambda v: "" if v is None else round(v, 4)
                 dump_writer.writerow([
                     i, raw_posture, posture_label, round(posture_score, 4),
@@ -209,7 +208,9 @@ def main() -> None:
                     fmt(features.back_knee_angle_deg),
                     fmt(features.body_aspect_h_over_w),
                     int(features.ground_from_paws),
-                    raw_tilt, round(tilt_angle, 2),
+                    round(orientation.spine_angle_deg, 1),
+                    round(orientation.bilateral_conf, 3),
+                    round(orientation.confidence, 3),
                 ])
 
         if dump_file is not None:
@@ -217,8 +218,8 @@ def main() -> None:
             print(f"Wrote feature dump {args.dump_features.resolve()}")
 
         labels_cache.write_text(json.dumps([
-            {"posture_label": pl, "posture_score": ps, "tilt_label": tl, "tilt_angle": ta}
-            for pl, ps, tl, ta in per_frame_labels
+            {"posture_label": pl, "posture_score": ps}
+            for pl, ps in per_frame_labels
         ]))
         print(f"Saved labels cache → {labels_cache}")
 
@@ -238,17 +239,17 @@ def main() -> None:
         stdin=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
 
-    for i, (frame, (posture_label, posture_score, tilt_label, tilt_angle)) in \
+    for i, (frame, (posture_label, posture_score)) in \
             enumerate(zip(smoothed_frames, per_frame_labels)):
         raw = decode.stdout.read(frame_bytes)
         if len(raw) < frame_bytes:
             break
         img = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3)).copy()
+        orientation = estimate_orientation(frame)
         draw_overlay(
             img, frame,
             posture=(posture_label, posture_score),
-            head_tilt=(tilt_label, tilt_angle),
-            debug_features=None,
+            orientation=orientation,
         )
         encode.stdin.write(img.tobytes())
 

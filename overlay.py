@@ -1,12 +1,14 @@
-"""Drawing utilities: keypoints, skeleton, and posture/tilt labels."""
+"""Drawing utilities: keypoints, skeleton, posture/tilt labels, and orientation compass."""
 
 from __future__ import annotations
 
+import math
 from typing import Optional
 
 import cv2
 import numpy as np
 
+from orientation import OrientationResult
 from posture import (
     Frame,
     PostureFeatures,
@@ -35,12 +37,6 @@ POSTURE_COLORS = {
     "unknown": (160, 160, 160),
 }
 
-HEAD_TILT_COLORS = {
-    "upright": (200, 200, 200),
-    "tilt_left": (0, 200, 255),
-    "tilt_right": (255, 100, 0),
-    "unknown": (160, 160, 160),
-}
 
 SKELETON_EDGES: list[tuple[str, str, tuple[int, int, int]]] = [
     # Head
@@ -124,14 +120,74 @@ def draw_skeleton(image: np.ndarray, frame: Frame,
         cv2.circle(image, center, radius, (0, 0, 0), 1, cv2.LINE_AA)
 
 
+def draw_orientation_compass(
+    image: np.ndarray,
+    result: OrientationResult,
+) -> None:
+    """Draw a small radial compass in the bottom-right corner (in place).
+
+    The dot sits at polar coordinates (spine_angle_deg, spine_len_ratio):
+      - dot on the edge  → dog is in pure profile (spine fully in-plane)
+      - dot at the center → dog faces toward/away from camera (spine foreshortened)
+
+    Dot color encodes bilateral_conf:
+      - green   (bilateral_conf → 1) : face-on; head-tilt label is reliable
+      - grey    (bilateral_conf → 0) : profile; head-tilt label is unreliable
+    """
+    h, w = image.shape[:2]
+    radius = max(35, round(_scale(image, 50)))
+    margin = max(10, round(_scale(image, 12)))
+    cx = w - margin - radius
+    cy = h - margin - radius
+
+    # Semi-transparent dark backdrop
+    mask = image.copy()
+    cv2.circle(mask, (cx, cy), radius + 3, (20, 20, 20), -1)
+    cv2.addWeighted(mask, 0.55, image, 0.45, 0, image)
+
+    ring_alpha = max(0.3, result.confidence)
+    ring_color = tuple(int(c * ring_alpha) for c in (130, 130, 130))
+    cv2.circle(image, (cx, cy), radius, ring_color, 1, cv2.LINE_AA)
+
+    # Cross-hair
+    arm = radius - 4
+    cross_color = (50, 50, 50)
+    cv2.line(image, (cx - arm, cy), (cx + arm, cy), cross_color, 1, cv2.LINE_AA)
+    cv2.line(image, (cx, cy - arm), (cx, cy + arm), cross_color, 1, cv2.LINE_AA)
+
+    # "orient" caption
+    cap_y = cy + radius + max(13, round(_scale(image, 13)))
+    cv2.putText(image, "orient", (cx - 20, cap_y),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1, cv2.LINE_AA)
+
+    if result.confidence < 0.1:
+        return
+
+    angle_rad = math.radians(result.spine_angle_deg)
+    dot_r = result.spine_len_ratio * radius
+    dot_x = int(round(cx + math.cos(angle_rad) * dot_r))
+    dot_y = int(round(cy + math.sin(angle_rad) * dot_r))
+
+    # Line from center to dot
+    t = result.bilateral_conf
+    line_color = (int(50 + t * 80), int(80 + t * 100), int(50 + t * 80))
+    cv2.line(image, (cx, cy), (dot_x, dot_y), line_color, 1, cv2.LINE_AA)
+
+    # Dot: grey (profile) → green (face-on)
+    dot_color = (int(80 + t * 60), int(80 + t * 140), int(80 + t * 60))
+    dot_radius = max(4, round(_scale(image, 5)))
+    cv2.circle(image, (dot_x, dot_y), dot_radius, dot_color, -1, cv2.LINE_AA)
+    cv2.circle(image, (dot_x, dot_y), dot_radius, (0, 0, 0), 1, cv2.LINE_AA)
+
+
 def draw_overlay(
     image: np.ndarray,
     frame: Optional[Frame],
     posture: tuple[str, float] = ("unknown", 0.0),
-    head_tilt: tuple[str, float] = ("unknown", 0.0),
     debug_features: Optional[PostureFeatures] = None,
+    orientation: Optional[OrientationResult] = None,
 ) -> None:
-    """Full overlay: skeleton + keypoints + posture/tilt labels (in place)."""
+    """Full overlay: skeleton + keypoints + posture label + orientation compass (in place)."""
     if frame is not None:
         draw_skeleton(image, frame)
 
@@ -140,13 +196,9 @@ def draw_overlay(
     margin = max(12, round(_scale(image, 12)))
 
     p_label, p_score = posture
-    t_label, t_angle = head_tilt
     _draw_text(image, f"posture: {p_label} ({p_score:.2f})",
                (margin, line_gap),
                POSTURE_COLORS.get(p_label, (255, 255, 255)), scale=font_scale)
-    _draw_text(image, f"head:    {t_label} ({t_angle:+.0f} deg)",
-               (margin, line_gap * 2),
-               HEAD_TILT_COLORS.get(t_label, (255, 255, 255)), scale=font_scale)
 
     if debug_features is not None:
         f = debug_features
@@ -162,5 +214,8 @@ def draw_overlay(
             f"ground:     {'paw' if f.ground_from_paws else 'kp'}",
         ]
         for k, line in enumerate(lines):
-            _draw_text(image, line, (margin, line_gap * 3 + k * debug_gap),
+            _draw_text(image, line, (margin, line_gap * 2 + k * debug_gap),
                        (220, 220, 220), scale=debug_scale)
+
+    if orientation is not None:
+        draw_orientation_compass(image, orientation)

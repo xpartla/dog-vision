@@ -25,7 +25,10 @@ import math
 from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from orientation import OrientationResult
 
 import numpy as np
 import pandas as pd
@@ -579,12 +582,23 @@ class LearnedPostureClassifier:
 HEAD_TILT_LABELS = ("upright", "tilt_left", "tilt_right", "unknown")
 
 
-def classify_head_tilt(frame: Frame, tilt_threshold_deg: float = 15.0) -> tuple[str, float]:
+def classify_head_tilt(
+    frame: Frame,
+    tilt_threshold_deg: float = 15.0,
+    orientation: Optional[OrientationResult] = None,
+) -> tuple[str, float]:
     """Tilt of the eye-line relative to (perpendicular-to-head-axis).
 
     Returns (label, signed-tilt-deg). Sign convention: positive = right side
     lower in image space; negative = left side lower.
+
+    When `orientation` is supplied and the dog is mostly in profile
+    (bilateral_conf < 0.25), the eye-line measurement is unreliable and
+    "unknown" is returned instead of a likely-wrong label.
     """
+    if orientation is not None and orientation.bilateral_conf < 0.25:
+        return ("unknown", 0.0)
+
     nose = frame.get(KP_NOSE)
     neck = frame.get(KP_NECK_BASE)
     le = frame.get(KP_LEFT_EYE)
