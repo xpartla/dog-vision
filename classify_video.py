@@ -34,7 +34,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from orientation import estimate_orientation
+from orientation import OrientationSmoother, estimate_orientation
 from overlay import draw_overlay
 from posture import (
     DEFAULT_CONFIDENCE_THRESHOLD,
@@ -162,6 +162,12 @@ def main() -> None:
             frame = kp_smoother.smooth(frame)
         smoothed_frames.append(frame)
 
+    # --- pre-compute temporally smoothed orientations ---
+    orient_smoother = OrientationSmoother()
+    smoothed_orientations = [
+        orient_smoother.smooth(estimate_orientation(f)) for f in smoothed_frames
+    ]
+
     # --- classification: load from cache or run ---
     if args.rerender:
         if not labels_cache.exists():
@@ -208,7 +214,7 @@ def main() -> None:
             per_frame_labels.append((posture_label, posture_score))
 
             if dump_writer is not None:
-                orientation = estimate_orientation(frame)
+                orientation = smoothed_orientations[i]
                 fmt = lambda v: "" if v is None else round(v, 4)
                 dump_writer.writerow([
                     i, raw_posture, posture_label, round(posture_score, 4),
@@ -264,7 +270,7 @@ def main() -> None:
         if len(raw) < frame_bytes:
             break
         img = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3)).copy()
-        orientation = estimate_orientation(frame)
+        orientation = smoothed_orientations[i]
         draw_overlay(
             img, frame,
             posture=(posture_label, posture_score),
