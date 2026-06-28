@@ -67,7 +67,8 @@ done
 log "=== Step 2/3: Rebuilding dataset ==="
 $PYTHON build_dataset.py data/ --out dataset.npz --stride 2 --augment-flip
 
-log "=== Step 3/3: Retraining MLP ==="
+log "=== Step 3/3: Retraining models (RF + MLP) ==="
+$PYTHON train_posture.py dataset.npz --model rf  --out posture_model.joblib
 $PYTHON train_posture.py dataset.npz --model mlp --out posture_model_mlp.joblib
 
-log "=== All done. Model saved to posture_model_mlp.joblib ==="
+log "=== All done. RF → posture_model.joblib, MLP → posture_model_mlp.joblib ==="

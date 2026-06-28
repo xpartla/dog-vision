@@ -45,6 +45,7 @@ from posture import (
     compute_posture_features,
     list_keypoint_names,
     load_keypoint_frames,
+    merge_short_segments,
 )
 
 
@@ -66,8 +67,12 @@ def main() -> None:
                         help="Output video path (default: output/<stem>_posture.mp4)")
     parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD,
                         help="Minimum keypoint likelihood to consider a keypoint visible")
-    parser.add_argument("--smooth-window", type=int, default=10,
+    parser.add_argument("--smooth-window", type=int, default=30,
                         help="Sliding-window size (frames) for label smoothing")
+    parser.add_argument("--min-segment", type=int, default=25,
+                        help="Minimum segment length (frames) for post-processing; "
+                             "segments shorter than this are merged into their larger "
+                             "neighbour.  Set to 0 to disable.")
     parser.add_argument("--no-smooth-keypoints", action="store_true",
                         help="Disable 1-Euro smoothing of keypoint trajectories")
     parser.add_argument("--smooth-mincutoff", type=float, default=1.0,
@@ -186,11 +191,17 @@ def main() -> None:
                 "orient_spine_deg", "orient_bilateral_conf", "orient_confidence",
             ])
 
+        # Batch-classify all frames at once (avoids per-call RF overhead).
+        if posture_clf is not None:
+            raw_clf_results = posture_clf.classify_frames(smoothed_frames)
+        else:
+            raw_clf_results = None
+
         per_frame_labels = []
         for i, frame in enumerate(smoothed_frames):
             features = compute_posture_features(frame)
-            if posture_clf is not None:
-                raw_posture, posture_score = posture_clf.classify(frame)
+            if raw_clf_results is not None:
+                raw_posture, posture_score = raw_clf_results[i]
             else:
                 raw_posture, posture_score = classify_posture(features)
             posture_label = posture_smoother.push(raw_posture)
@@ -216,6 +227,14 @@ def main() -> None:
         if dump_file is not None:
             dump_file.close()
             print(f"Wrote feature dump {args.dump_features.resolve()}")
+
+        # Post-process: merge segments that are too short (jitter suppression).
+        if args.min_segment > 0:
+            raw_labels = [pl for pl, _ps in per_frame_labels]
+            merged = merge_short_segments(raw_labels, min_length=args.min_segment)
+            per_frame_labels = [
+                (merged[i], ps) for i, (_pl, ps) in enumerate(per_frame_labels)
+            ]
 
         labels_cache.write_text(json.dumps([
             {"posture_label": pl, "posture_score": ps}

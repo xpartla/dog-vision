@@ -569,12 +569,36 @@ class LearnedPostureClassifier:
         vec = self._pf.feature_vector(frame)
         if vec is None:
             return ("unknown", 0.0)
-        proba = self._model.predict_proba(vec.reshape(1, -1))[0]
+        proba = self.classify_batch(np.array([vec]))[0]
         best = int(np.argmax(proba))
         label, p = self._classes[best], float(proba[best])
         if p < self.min_proba:
             return ("unknown", p)
         return (label, p)
+
+    def classify_batch(self, vecs: np.ndarray) -> np.ndarray:
+        """Batch predict_proba — avoids per-call sklearn parallel overhead."""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return self._model.predict_proba(vecs)
+
+    def classify_frames(self, frames: "list[Frame]") -> "list[tuple[str, float]]":
+        """Classify a list of frames in one batch call (much faster for RF)."""
+        vecs, indices = [], []
+        results: list[tuple[str, float]] = [("unknown", 0.0)] * len(frames)
+        for i, frame in enumerate(frames):
+            vec = self._pf.feature_vector(frame)
+            if vec is not None:
+                vecs.append(vec)
+                indices.append(i)
+        if vecs:
+            probas = self.classify_batch(np.stack(vecs))
+            for idx, proba in zip(indices, probas):
+                best = int(np.argmax(proba))
+                label, p = self._classes[best], float(proba[best])
+                results[idx] = (label, p) if p >= self.min_proba else ("unknown", p)
+        return results
 
 
 # === Head tilt ==============================================================
@@ -639,17 +663,103 @@ def classify_head_tilt(
 # === Sliding-window smoothing ==============================================
 
 class LabelSmoother:
-    """Majority-vote label over a sliding window of recent predictions."""
+    """Majority-vote label over a sliding window of recent predictions.
 
-    def __init__(self, window: int = 10):
+    When `suppress_unknown` is True (the default), "unknown" labels are not
+    pushed into the vote buffer — they're replaced by the last non-unknown
+    result so transient detection failures don't pollute the majority.
+    """
+
+    def __init__(self, window: int = 10, suppress_unknown: bool = True):
         if window < 1:
             raise ValueError("window must be >= 1")
         self.window = window
+        self.suppress_unknown = suppress_unknown
         self._buffer: deque[str] = deque(maxlen=window)
+        self._last_stable: str = "unknown"
 
     def push(self, label: str) -> str:
-        self._buffer.append(label)
-        return Counter(self._buffer).most_common(1)[0][0]
+        if self.suppress_unknown and label == "unknown":
+            effective = self._last_stable
+        else:
+            effective = label
+        self._buffer.append(effective)
+        result = Counter(self._buffer).most_common(1)[0][0]
+        if result != "unknown":
+            self._last_stable = result
+        return result
 
     def reset(self) -> None:
         self._buffer.clear()
+        self._last_stable = "unknown"
+
+
+def merge_short_segments(
+    labels: list[str],
+    min_length: int = 25,
+    unknown_label: str = "unknown",
+) -> list[str]:
+    """Post-process a label sequence: fill unknown gaps then merge short segments.
+
+    1. Replace any remaining "unknown" labels with the nearest preceding
+       non-unknown label (or the first following one if at the start).
+    2. Iteratively merge the shortest segment into its larger neighbor until
+       all segments are >= min_length frames.
+    """
+    if not labels:
+        return labels
+
+    result = list(labels)
+
+    # Pass 1: forward-fill unknown with the last stable label.
+    stable: Optional[str] = None
+    for i in range(len(result)):
+        if result[i] != unknown_label:
+            stable = result[i]
+        elif stable is not None:
+            result[i] = stable
+
+    # Back-fill any leading unknowns from the first stable label.
+    first_stable = next((l for l in result if l != unknown_label), unknown_label)
+    for i in range(len(result)):
+        if result[i] == unknown_label:
+            result[i] = first_stable
+        else:
+            break
+
+    # Pass 2: iteratively merge shortest segment into its longer neighbour.
+    def _segments(seq: list[str]) -> list[tuple[int, int, int, str]]:
+        if not seq:
+            return []
+        segs: list[tuple[int, int, int, str]] = []
+        s, cur = 0, seq[0]
+        for i, v in enumerate(seq):
+            if v != cur:
+                segs.append((s, i - 1, i - s, cur))
+                s, cur = i, v
+        segs.append((s, len(seq) - 1, len(seq) - s, cur))
+        return segs
+
+    changed = True
+    while changed:
+        changed = False
+        segs = _segments(result)
+        # Find the shortest segment below the threshold.
+        short_segs = [(idx, s) for idx, s in enumerate(segs) if s[2] < min_length]
+        if not short_segs:
+            break
+        # Pick the shortest one (ties broken by first occurrence).
+        seg_idx, (start, end, _length, _label) = min(short_segs, key=lambda x: x[1][2])
+        if seg_idx == 0:
+            nb_label = segs[1][3] if len(segs) > 1 else _label
+        elif seg_idx == len(segs) - 1:
+            nb_label = segs[seg_idx - 1][3]
+        else:
+            left_len = segs[seg_idx - 1][2]
+            right_len = segs[seg_idx + 1][2]
+            nb_label = segs[seg_idx - 1][3] if left_len >= right_len else segs[seg_idx + 1][3]
+        for i in range(start, end + 1):
+            result[i] = nb_label
+        changed = True
+
+    return result
