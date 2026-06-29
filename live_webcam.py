@@ -1,29 +1,31 @@
-"""Chunked live webcam loop with SuperAnimal-Quadruped + phase-2 overlays.
+"""Live webcam loop: capture → inference → display, each on its own thread.
 
-Captures ~1.5-second chunks from the webcam, runs SuperAnimal on each chunk,
-loads the resulting keypoints, classifies posture and head tilt per frame
-(with 1-Euro keypoint smoothing and majority-vote label smoothing that persist
-across chunks), then plays back the captured chunk with the full overlay.
+The capture thread reads frames at the camera's native FPS. The inference thread
+blocks waiting for frames, runs SuperAnimalInferencer (weights loaded once at
+startup) and classifies posture. The display thread reads the latest live frame and
+overlays the last-known keypoints, giving smooth 30-fps video even while inference
+is running. Keypoints fade slightly when they are stale.
 
-Net latency is roughly chunk-length plus inference time (a couple of seconds
-on an RTX 2060/3060). True frame-by-frame real-time is a follow-up.
+Net latency is ~inference time per single frame (~100-300ms on GPU) instead of the
+previous chunk-length + inference (~2s).
 
 Example:
     python live_webcam.py
-    python live_webcam.py --chunk-seconds 1.0 --no-posture
+    python live_webcam.py --posture-model posture_model_mlp.joblib
+    python live_webcam.py --no-posture
 """
 
 from __future__ import annotations
 
 import argparse
-import shutil
-import tempfile
+import queue
+import threading
 import time
 from pathlib import Path
 
 import cv2
-import deeplabcut
 
+from inferencer import SuperAnimalInferencer
 from orientation import estimate_orientation
 from overlay import draw_overlay
 from posture import (
@@ -33,19 +35,36 @@ from posture import (
     LearnedPostureClassifier,
     classify_posture,
     compute_posture_features,
-    load_keypoint_frames,
 )
+
+# Seconds of stale keypoints before the skeleton starts fading.
+_STALE_FADE_START = 0.3
+# Seconds at which the skeleton reaches minimum opacity.
+_STALE_FADE_END = 2.0
+_SKELETON_MIN_ALPHA = 0.2
+
+
+def _stale_alpha(stale_secs: float) -> float:
+    if stale_secs <= _STALE_FADE_START:
+        return 1.0
+    if stale_secs >= _STALE_FADE_END:
+        return _SKELETON_MIN_ALPHA
+    t = (stale_secs - _STALE_FADE_START) / (_STALE_FADE_END - _STALE_FADE_START)
+    return 1.0 - t * (1.0 - _SKELETON_MIN_ALPHA)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--camera", type=int, default=0)
-    parser.add_argument("--chunk-seconds", type=float, default=1.5)
+    parser.add_argument("--video", type=Path, default=None,
+                        help="Use a video file instead of the webcam (for testing).")
+    parser.add_argument("--loop", action="store_true",
+                        help="Loop the video file instead of stopping at the end.")
     parser.add_argument(
         "--fps",
         type=float,
         default=None,
-        help="Frame rate. If omitted, auto-detected from the camera (fallback 30).",
+        help="Display frame rate. If omitted, auto-detected from source (fallback 30).",
     )
     parser.add_argument("--model", default="hrnet_w32", choices=["hrnet_w32", "resnet_50"])
     parser.add_argument("--detector", default="fasterrcnn_resnet50_fpn_v2")
@@ -60,36 +79,40 @@ def main() -> None:
     parser.add_argument("--smooth-beta", type=float, default=0.5)
     parser.add_argument("--posture-model", type=Path, default=None,
                         help="Trained posture model (.joblib). Uses the learned, "
-                             "viewpoint-robust classifier instead of the geometric rules.")
+                             "viewpoint-robust classifier instead of geometric rules.")
     parser.add_argument("--no-posture", action="store_true",
                         help="Skip phase-2 classification and just draw keypoints")
     parser.add_argument("--debug", action="store_true",
                         help="Overlay per-feature numeric values on each frame")
+    parser.add_argument("--max-individuals", type=int, default=10)
     args = parser.parse_args()
 
-    cap = cv2.VideoCapture(args.camera)
+    # --- Capture source setup ---
+    if args.video is not None:
+        if not args.video.exists():
+            raise SystemExit(f"Video file not found: {args.video}")
+        cap = cv2.VideoCapture(str(args.video))
+        source_desc = f"video file {args.video.name}"
+    else:
+        cap = cv2.VideoCapture(args.camera)
+        source_desc = f"camera index {args.camera}"
     if not cap.isOpened():
-        raise SystemExit(f"Could not open camera index {args.camera}")
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        raise SystemExit(f"Could not open {source_desc}")
 
     if args.fps is not None:
         fps, fps_source = args.fps, "user override"
     else:
         reported = cap.get(cv2.CAP_PROP_FPS)
         if 5.0 <= reported <= 120.0:
-            fps, fps_source = reported, "camera-reported"
+            fps, fps_source = reported, "source-reported"
         else:
-            fps, fps_source = 30.0, f"fallback (camera reported {reported:.1f})"
+            fps, fps_source = 30.0, f"fallback (source reported {reported:.1f})"
 
-    chunk_frames = max(1, int(args.chunk_seconds * fps))
-    print(
-        f"Live mode: {chunk_frames} frames per chunk "
-        f"({args.chunk_seconds}s @ {fps:.1f}fps, {fps_source}), {width}x{height}"
-    )
-    print("Press q in the display window to quit.")
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    print(f"Source: {source_desc}  {width}x{height} @ {fps:.1f}fps ({fps_source})")
 
+    # --- Posture classifier ---
     posture_clf = None
     if args.posture_model is not None:
         if not args.posture_model.exists():
@@ -100,7 +123,7 @@ def main() -> None:
         print(f"Using learned posture model {args.posture_model} "
               f"(confidence {args.confidence:.2f})")
 
-    # Persistent smoothers — state carries across chunks for visual continuity.
+    # --- Smoothers (state persists across frames) ---
     kp_smoother = None
     if not args.no_smooth_keypoints:
         kp_smoother = KeypointSmoother(fps=fps,
@@ -108,104 +131,153 @@ def main() -> None:
                                        beta=args.smooth_beta)
     posture_smoother = LabelSmoother(window=args.smooth_window)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    # --- Load inference runners once ---
+    print("Loading SuperAnimal model weights (downloading if needed)...")
+    inferencer = SuperAnimalInferencer(
+        model_name=args.model,
+        detector_name=args.detector,
+        max_individuals=args.max_individuals,
+        confidence_threshold=args.confidence,
+    )
+    print("Model loaded. Starting live feed. Press q to quit.")
 
-    with tempfile.TemporaryDirectory(prefix="dogvision-") as tmp_root:
-        tmp_root = Path(tmp_root)
-        chunk_idx = 0
-        stop = False
+    # --- Shared state ---
+    stop_event = threading.Event()
 
-        while not stop:
-            chunk_dir = tmp_root / f"chunk_{chunk_idx}"
-            chunk_dir.mkdir()
-            chunk_path = chunk_dir / "chunk.mp4"
+    # Latest raw frame from camera (for display thread).
+    _frame_lock = threading.Lock()
+    _latest_frame: list = [None]  # list as mutable container
 
-            writer = cv2.VideoWriter(str(chunk_path), fourcc, fps, (width, height))
+    # Queue from capture → inference (depth=1; old frames dropped automatically).
+    infer_queue: queue.Queue = queue.Queue(maxsize=1)
+
+    # Latest inference result (for display thread).
+    _result_lock = threading.Lock()
+    _latest_result: list = [None]  # (kpf, posture, orientation, features, timestamp)
+
+    # --- Capture thread ---
+    def capture_loop() -> None:
+        while not stop_event.is_set():
+            ret, frame = cap.read()
+            if not ret:
+                if args.loop and args.video is not None:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    continue
+                print("End of source; stopping.")
+                stop_event.set()
+                break
+            with _frame_lock:
+                _latest_frame[0] = frame
+
+            # Drop old frame if inference hasn't consumed yet; put new one.
+            try:
+                infer_queue.put_nowait(frame.copy())
+            except queue.Full:
+                try:
+                    infer_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    infer_queue.put_nowait(frame.copy())
+                except queue.Full:
+                    pass
+
+    # --- Inference thread ---
+    def inference_loop() -> None:
+        while not stop_event.is_set():
+            try:
+                frame = infer_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
             t0 = time.time()
-            captured = 0
-            for _ in range(chunk_frames):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                writer.write(frame)
-                captured += 1
-            writer.release()
-            t_capture = time.time() - t0
+            try:
+                kp_frames = inferencer.infer(frame)
+            except Exception as exc:
+                print(f"Inference error: {exc}")
+                continue
+            infer_ms = (time.time() - t0) * 1000
 
-            if captured == 0:
-                print("Camera read failed; exiting.")
+            kpf = kp_frames[0] if kp_frames else None
+
+            if kpf is not None and kp_smoother is not None:
+                kpf = kp_smoother.smooth(kpf)
+
+            if args.no_posture or kpf is None:
+                posture = ("unknown", 0.0)
+                features = None
+                orientation = None
+            else:
+                features = compute_posture_features(kpf)
+                if posture_clf is not None:
+                    raw_p, score_p = posture_clf.classify(kpf)
+                else:
+                    raw_p, score_p = classify_posture(features)
+                orientation = estimate_orientation(kpf)
+                posture = (posture_smoother.push(raw_p), score_p)
+
+            print(f"infer {infer_ms:.0f}ms  posture={posture[0]}")
+
+            with _result_lock:
+                _latest_result[0] = (kpf, posture, orientation, features, time.time())
+
+    # --- Display thread ---
+    def display_loop() -> None:
+        frame_delay_ms = max(1, int(1000 / fps))
+
+        while not stop_event.is_set():
+            with _frame_lock:
+                frame = _latest_frame[0]
+
+            if frame is None:
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    stop_event.set()
+                continue
+
+            img = frame.copy()
+
+            with _result_lock:
+                result = _latest_result[0]
+
+            if result is not None:
+                kpf, posture, orientation, features, result_ts = result
+                stale_secs = time.time() - result_ts
+            else:
+                kpf, posture, orientation, features = None, ("unknown", 0.0), None, None
+                stale_secs = 9999.0
+
+            draw_overlay(
+                img,
+                kpf,
+                posture=posture,
+                orientation=orientation,
+                debug_features=features if args.debug else None,
+                skeleton_alpha=_stale_alpha(stale_secs),
+            )
+
+            cv2.imshow("Dog Vision (q to quit)", img)
+            if cv2.waitKey(frame_delay_ms) & 0xFF == ord("q"):
+                stop_event.set()
                 break
 
-            t0 = time.time()
-            try:
-                deeplabcut.video_inference_superanimal(
-                    videos=[str(chunk_path)],
-                    superanimal_name="superanimal_quadruped",
-                    model_name=args.model,
-                    detector_name=args.detector,
-                    dest_folder=str(chunk_dir),
-                    pcutoff=args.pcutoff,
-                )
-            except Exception as exc:
-                print(f"chunk {chunk_idx}: inference failed: {exc}")
-                shutil.rmtree(chunk_dir, ignore_errors=True)
-                chunk_idx += 1
-                continue
-            t_infer = time.time() - t0
+    # --- Launch threads ---
+    threads = [
+        threading.Thread(target=capture_loop, name="capture", daemon=True),
+        threading.Thread(target=inference_loop, name="inference", daemon=True),
+        threading.Thread(target=display_loop, name="display", daemon=True),
+    ]
+    for t in threads:
+        t.start()
 
-            h5_files = list(chunk_dir.glob("*.h5"))
-            kp_frames = []
-            if h5_files:
-                try:
-                    kp_frames = load_keypoint_frames(h5_files[0],
-                                                     confidence_threshold=args.confidence)
-                except Exception as exc:
-                    print(f"chunk {chunk_idx}: failed to read predictions: {exc}")
+    # Main thread just waits for stop signal.
+    try:
+        while not stop_event.is_set():
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        stop_event.set()
 
-            print(f"chunk {chunk_idx}: capture {t_capture:.2f}s, infer {t_infer:.2f}s, "
-                  f"frames={len(kp_frames)}")
-
-            source = cv2.VideoCapture(str(chunk_path))
-            try:
-                for i in range(captured):
-                    ret, img = source.read()
-                    if not ret:
-                        break
-
-                    kpf = kp_frames[i] if i < len(kp_frames) else None
-                    if kpf is not None and kp_smoother is not None:
-                        kpf = kp_smoother.smooth(kpf)
-
-                    if args.no_posture or kpf is None:
-                        posture = ("unknown", 0.0)
-                        features = None
-                        orientation = None
-                    else:
-                        features = compute_posture_features(kpf)
-                        if posture_clf is not None:
-                            raw_p, score_p = posture_clf.classify(kpf)
-                        else:
-                            raw_p, score_p = classify_posture(features)
-                        orientation = estimate_orientation(kpf)
-                        posture = (posture_smoother.push(raw_p), score_p)
-
-                    draw_overlay(
-                        img,
-                        kpf,
-                        posture=posture,
-                        orientation=orientation,
-                        debug_features=features if args.debug else None,
-                    )
-
-                    cv2.imshow("Dog Vision (q to quit)", img)
-                    if cv2.waitKey(int(1000 / fps)) & 0xFF == ord("q"):
-                        stop = True
-                        break
-            finally:
-                source.release()
-
-            shutil.rmtree(chunk_dir, ignore_errors=True)
-            chunk_idx += 1
+    for t in threads:
+        t.join(timeout=3.0)
 
     cap.release()
     cv2.destroyAllWindows()

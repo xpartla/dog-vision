@@ -186,10 +186,20 @@ def draw_overlay(
     posture: tuple[str, float] = ("unknown", 0.0),
     debug_features: Optional[PostureFeatures] = None,
     orientation: Optional[OrientationResult] = None,
+    skeleton_alpha: float = 1.0,
 ) -> None:
-    """Full overlay: skeleton + keypoints + posture label + orientation compass (in place)."""
+    """Full overlay: skeleton + keypoints + posture label + orientation compass (in place).
+
+    skeleton_alpha fades the skeleton when keypoints are stale (1.0 = full, 0.0 = invisible).
+    Text labels are always drawn at full opacity.
+    """
     if frame is not None:
-        draw_skeleton(image, frame)
+        if skeleton_alpha < 0.99:
+            _tmp = image.copy()
+            draw_skeleton(_tmp, frame)
+            cv2.addWeighted(_tmp, skeleton_alpha, image, 1.0 - skeleton_alpha, 0, image)
+        else:
+            draw_skeleton(image, frame)
 
     font_scale = _scale(image, 0.8)
     line_gap = max(30, round(_scale(image, 30)))
