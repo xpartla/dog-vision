@@ -6,7 +6,7 @@ video, then classifies its posture — sitting, standing, or lying — frame by
 frame, robust to camera angle, fur, and the dog facing any direction.
 
 <p align="center">
-  <img src="assets/demo.gif" alt="Skeleton overlay with live posture label tracking a dog from standing to sitting" width="640">
+  <img src="assets/demo.gif" alt="Skeleton overlay with live posture label tracking a dog from standing to sitting" width="320">
 </p>
 
 <p align="center"><sub>Live skeleton overlay + posture label. The classifier follows in real time.</sub></p>
