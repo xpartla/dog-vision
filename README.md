@@ -140,10 +140,12 @@ cd dog-vision
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt          # or: pip install -e .
 
-# Annotate a recorded clip
-python -m dogvision.tools.process_video samples/dog.mp4    # → keypoints (.h5)
+# 1. Pose estimation: video → keypoints (.h5 in output/)
+python -m dogvision.tools.process_video samples/dog.mp4
+
+# 2. Classify: keypoints → posture-labeled video (uses the trained RF model)
 python -m dogvision.tools.classify_video samples/dog.mp4 \
-    --posture-model models/posture_model.joblib            # → posture-labeled video
+    --posture-model models/posture_model.joblib
 ```
 
 Every tool runs as `python -m dogvision.tools.<name>` (or, after
