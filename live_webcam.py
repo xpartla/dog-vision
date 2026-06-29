@@ -18,12 +18,22 @@ Example:
 from __future__ import annotations
 
 import argparse
+import os
 import queue
 import threading
 import time
 from pathlib import Path
 
+# Under WSLg, OpenCV's Qt window defaults to the Wayland backend, which fails to
+# commit the surface buffer in sync with imshow(): the video shears diagonally and
+# only refreshes when the window is dragged (a move forces a compositor redraw).
+# Forcing the xcb (XWayland) backend renders reliably. Must run before importing
+# cv2; respect an explicit user override.
+if os.environ.get("WAYLAND_DISPLAY") and not os.environ.get("QT_QPA_PLATFORM"):
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+
 import cv2
+import numpy as np
 
 from inferencer import SuperAnimalInferencer
 from orientation import estimate_orientation
@@ -85,6 +95,14 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true",
                         help="Overlay per-feature numeric values on each frame")
     parser.add_argument("--max-individuals", type=int, default=10)
+    parser.add_argument("--display-width", type=int, default=1280,
+                        help="Resize frames to this width before display (keeps aspect ratio). "
+                             "Lower values fix WSL2 rendering artifacts. 0 = no resize.")
+    parser.add_argument("--display", choices=["auto", "window", "mjpeg"], default="auto",
+                        help="auto: browser stream on WSL, native window otherwise. "
+                             "window: cv2.imshow. mjpeg: stream to http://localhost:<port>/.")
+    parser.add_argument("--port", type=int, default=8090,
+                        help="Port for the MJPEG browser stream (--display mjpeg/auto-on-WSL).")
     args = parser.parse_args()
 
     # --- Capture source setup ---
@@ -141,6 +159,36 @@ def main() -> None:
     )
     print("Model loaded. Starting live feed. Press q to quit.")
 
+    # --- Display backend setup ---
+    # OpenCV's Qt/Tk GUI windows do not render reliably under WSLg (frames only
+    # repaint on a window move). On WSL we stream to the browser instead.
+    display_mode = args.display
+    if display_mode == "auto":
+        try:
+            is_wsl = "microsoft" in Path("/proc/version").read_text().lower()
+        except OSError:
+            is_wsl = False
+        display_mode = "mjpeg" if is_wsl else "window"
+
+    disp_h = int(height * args.display_width / width) if args.display_width > 0 else height
+
+    _WIN = "Dog Vision (q to quit)"
+    mjpeg = None
+    if display_mode == "window":
+        cv2.namedWindow(_WIN, cv2.WINDOW_NORMAL)
+        if args.display_width > 0:
+            cv2.resizeWindow(_WIN, args.display_width, disp_h)
+    else:
+        from mjpeg_server import MJPEGServer
+        mjpeg = MJPEGServer(port=args.port)
+        mjpeg.start()
+        print(f"Display: open http://localhost:{args.port}/ in your browser. "
+              f"Press Ctrl-C here to quit.")
+
+    # Real-time frame pacing (shared by capture throttle + display loop).
+    frame_delay_ms = max(1, int(1000 / fps))
+    frame_delay_s = 1.0 / fps
+
     # --- Shared state ---
     stop_event = threading.Event()
 
@@ -157,17 +205,33 @@ def main() -> None:
 
     # --- Capture thread ---
     def capture_loop() -> None:
+        # A real camera blocks at its native rate, but a video file decodes as fast
+        # as the disk allows (hundreds of fps). Pace file reads to real time so the
+        # displayed video plays at the correct speed instead of racing ahead.
+        throttle = args.video is not None
+        next_frame_t = time.monotonic()
         while not stop_event.is_set():
+            if throttle:
+                now = time.monotonic()
+                sleep_s = next_frame_t - now
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+                    next_frame_t += frame_delay_s
+                else:
+                    # Fell behind (e.g. slow decode); resync without bursting.
+                    next_frame_t = now + frame_delay_s
+
             ret, frame = cap.read()
             if not ret:
                 if args.loop and args.video is not None:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                    next_frame_t = time.monotonic()
                     continue
                 print("End of source; stopping.")
                 stop_event.set()
                 break
             with _frame_lock:
-                _latest_frame[0] = frame
+                _latest_frame[0] = frame.copy()
 
             # Drop old frame if inference hasn't consumed yet; put new one.
             try:
@@ -221,17 +285,28 @@ def main() -> None:
             with _result_lock:
                 _latest_result[0] = (kpf, posture, orientation, features, time.time())
 
-    # --- Display thread ---
-    def display_loop() -> None:
-        frame_delay_ms = max(1, int(1000 / fps))
+    # --- Launch background threads (capture + inference only) ---
+    # OpenCV's Qt event loop must run on the main thread; display stays here.
+    threads = [
+        threading.Thread(target=capture_loop, name="capture", daemon=True),
+        threading.Thread(target=inference_loop, name="inference", daemon=True),
+    ]
+    for t in threads:
+        t.start()
 
+    # --- Display loop on main thread ---
+    try:
         while not stop_event.is_set():
+            loop_t0 = time.monotonic()
             with _frame_lock:
                 frame = _latest_frame[0]
 
             if frame is None:
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    stop_event.set()
+                if display_mode == "window":
+                    if cv2.waitKey(1) & 0xFF == ord("q"):
+                        stop_event.set()
+                else:
+                    time.sleep(0.005)
                 continue
 
             img = frame.copy()
@@ -255,24 +330,21 @@ def main() -> None:
                 skeleton_alpha=_stale_alpha(stale_secs),
             )
 
-            cv2.imshow("Dog Vision (q to quit)", img)
-            if cv2.waitKey(frame_delay_ms) & 0xFF == ord("q"):
-                stop_event.set()
-                break
+            if args.display_width > 0:
+                img = cv2.resize(img, (args.display_width, disp_h),
+                                 interpolation=cv2.INTER_LINEAR)
 
-    # --- Launch threads ---
-    threads = [
-        threading.Thread(target=capture_loop, name="capture", daemon=True),
-        threading.Thread(target=inference_loop, name="inference", daemon=True),
-        threading.Thread(target=display_loop, name="display", daemon=True),
-    ]
-    for t in threads:
-        t.start()
-
-    # Main thread just waits for stop signal.
-    try:
-        while not stop_event.is_set():
-            time.sleep(0.1)
+            if display_mode == "window":
+                cv2.imshow(_WIN, np.ascontiguousarray(img))
+                if cv2.waitKey(frame_delay_ms) & 0xFF == ord("q"):
+                    stop_event.set()
+            else:
+                mjpeg.update(img)
+                # Sleep only the remaining time after overlay/encode work so the
+                # display stays near real time instead of frame_delay + work.
+                remaining = frame_delay_s - (time.monotonic() - loop_t0)
+                if remaining > 0:
+                    time.sleep(remaining)
     except KeyboardInterrupt:
         stop_event.set()
 
@@ -280,7 +352,10 @@ def main() -> None:
         t.join(timeout=3.0)
 
     cap.release()
-    cv2.destroyAllWindows()
+    if display_mode == "window":
+        cv2.destroyAllWindows()
+    if mjpeg is not None:
+        mjpeg.stop()
 
 
 if __name__ == "__main__":

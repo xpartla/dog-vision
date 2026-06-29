@@ -82,19 +82,31 @@ class SuperAnimalInferencer:
 
         if self._detector_runner is not None:
             det_preds = self._detector_runner.inference([rgb])
+            if not det_preds:
+                # No detector output this frame (e.g. no animal found).
+                return [self._empty_frame()]
             bbox_ctx = {k: v for k, v in det_preds[0].items()
                         if k in ("bboxes", "bbox_scores")}
+            bboxes = bbox_ctx.get("bboxes")
+            if bboxes is None or len(bboxes) == 0:
+                # No animal detected; skip pose inference (DLC raises on empty bboxes).
+                return [self._empty_frame()]
             pose_input = [(rgb, bbox_ctx)]
         else:
             pose_input = [rgb]
 
         pose_preds = self._pose_runner.inference(pose_input)
+        if not pose_preds:
+            return [self._empty_frame()]
         return [self._to_frame(pose_preds[0])]
+
+    def _empty_frame(self) -> Frame:
+        return Frame(keypoints={}, confidence_threshold=self.confidence_threshold)
 
     def _to_frame(self, pred: dict) -> Frame:
         poses = pred.get("bodyparts")
         if poses is None or len(poses) == 0:
-            return Frame(keypoints={}, confidence_threshold=self.confidence_threshold)
+            return self._empty_frame()
 
         if poses.ndim == 2:
             poses = poses[np.newaxis]
