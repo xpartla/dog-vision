@@ -51,7 +51,7 @@ process_clip() {
     fi
 
     log "  Processing $video ..."
-    $PYTHON process_video.py "$video" --output-dir "$out_dir"
+    $PYTHON -m dogvision.tools.process_video "$video" --output-dir "$out_dir"
     log "  Done: $video"
 }
 
@@ -65,10 +65,10 @@ for v in "${NEW_SITTING[@]}" "${NEW_STANDING[@]}" "${NEW_LYING[@]}"; do
 done
 
 log "=== Step 2/3: Rebuilding dataset ==="
-$PYTHON build_dataset.py data/ --out dataset.npz --stride 2 --augment-flip
+$PYTHON -m dogvision.tools.build_dataset data/ --out dataset.npz --stride 2 --augment-flip
 
 log "=== Step 3/3: Retraining models (RF + MLP) ==="
-$PYTHON train_posture.py dataset.npz --model rf  --out posture_model.joblib
-$PYTHON train_posture.py dataset.npz --model mlp --out posture_model_mlp.joblib
+$PYTHON -m dogvision.tools.train_posture dataset.npz --model rf  --out models/posture_model.joblib
+$PYTHON -m dogvision.tools.train_posture dataset.npz --model mlp --out models/posture_model_mlp.joblib
 
-log "=== All done. RF → posture_model.joblib, MLP → posture_model_mlp.joblib ==="
+log "=== All done. RF → models/posture_model.joblib, MLP → models/posture_model_mlp.joblib ==="

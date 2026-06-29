@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dog-vision"
+version = "0.1.0"
+description = "Markerless dog pose estimation and posture classification (SuperAnimal-Quadruped + scikit-learn)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "deeplabcut>=3.0.0rc14",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "tables>=3.8.0",
+    "scikit-learn>=1.3",
+    "joblib>=1.3",
+]
+
+# Optional: `pip install -e .` exposes these as commands. Without installing,
+# every tool also runs as `python -m dogvision.tools.<name>`.
+[project.scripts]
+dogvision-process = "dogvision.tools.process_video:main"
+dogvision-classify = "dogvision.tools.classify_video:main"
+dogvision-live = "dogvision.tools.live_webcam:main"
+dogvision-record = "dogvision.tools.webcam_record:main"
+dogvision-build-dataset = "dogvision.tools.build_dataset:main"
+dogvision-train = "dogvision.tools.train_posture:main"
+
+[tool.setuptools]
+packages = ["dogvision", "dogvision.tools"]

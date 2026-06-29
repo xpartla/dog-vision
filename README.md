@@ -61,7 +61,8 @@ frame, robust to camera angle, fur, and the dog facing any direction.
                                                 annotated frame
 ```
 
-**Learned classifier** A Random Forest / MLP trained on labeled clips.
+**Learned classifier.** A Random Forest (default) or MLP trained on labeled
+clips — see the [comparison](#results) below.
 
 **Feature engineering over raw coordinates.** Rather than feed pixel locations
 to the model, the pipeline derives 128 features that are invariant to where the
@@ -76,18 +77,20 @@ generalization to *unseen recordings*.
 
 ## Results
 
-Trained on ~10k labeled frames from ~50 clips across 3 postures, evaluated on
-clips the model never saw during training:
+Trained on ~10k labeled frames from 48 clips across 3 postures, evaluated on
+clips the model never saw during training (grouped split — see below). Both
+classifiers train from the same 128-feature vectors:
 
-| Metric | Score |
-|---|---|
-| Grouped 5-fold CV accuracy | **~75%** (±9%) |
-| Held-out test accuracy (unseen clips) | **~77%** |
-| `sitting` recall | ~0.97 |
-| `standing` recall | ~0.80 |
-| `lying` recall | ~0.65 |
+| Model | Grouped 5-fold CV | Held-out test acc. | Macro F1 | Recall — lying / sitting / standing |
+|---|---|---|---|---|
+| **Random Forest** (shipped default) | **76%** (±8%) | **80%** | **0.81** | 0.72 / 0.97 / 0.82 |
+| MLP (128→64) | 76% (±6%) | 75% | 0.75 | 0.68 / 0.98 / 0.72 |
 
-The main confusion is `lying` ↔ `standing` from elevated camera angles underrepresented in the training set.
+The Random Forest generalizes better to unseen clips and is the default; the MLP
+trains with slightly tighter cross-validation variance but trails on held-out
+accuracy. Both nail `sitting` and share the same weak spot — `lying` ↔
+`standing` confusion from elevated camera angles underrepresented in the
+training set, which is the clearest lever for the next round of data collection.
 
 ## Tech stack
 
@@ -109,16 +112,24 @@ A few problems that were more interesting than they first looked:
 
 ```
 dog-vision/
-├── process_video.py     # run SuperAnimal on a video → keypoints (.h5)
-├── pose_features.py     # 128-feature vector from raw keypoints
-├── posture.py           # Frame/Keypoint model, classifiers, smoothing
-├── classify_video.py    # annotate a video with posture labels
-├── live_webcam.py       # live chunked webcam overlay (→ browser via MJPEG)
-├── build_dataset.py     # labeled clips → dataset.npz
-├── train_posture.py     # train RF / MLP, grouped CV, confusion matrix
-├── retrain.sh           # end-to-end: process clips → rebuild → retrain
-├── posture_model.joblib # trained classifier (committed, ready to run)
-└── dataset.npz          # extracted training features
+├── dogvision/                # importable package
+│   ├── posture.py            # Frame/Keypoint model, classifiers, smoothing
+│   ├── pose_features.py      # 128-feature viewpoint-robust vector
+│   ├── orientation.py        # body-orientation estimate
+│   ├── overlay.py            # skeleton + label rendering
+│   ├── inferencer.py         # keeps SuperAnimal resident for live use
+│   ├── mjpeg_server.py       # browser preview for headless / WSL hosts
+│   └── tools/                # command-line entry points (run via `python -m`)
+│       ├── process_video.py  #   video → keypoints (.h5)
+│       ├── classify_video.py #   annotate a video with posture labels
+│       ├── live_webcam.py     #  live chunked webcam overlay
+│       ├── build_dataset.py  #   labeled clips → dataset.npz
+│       ├── train_posture.py  #   train RF / MLP, grouped CV, confusion matrix
+│       └── webcam_record.py  #   capture raw footage
+├── models/                   # trained classifiers (committed, ready to run)
+├── assets/                   # demo media
+├── dataset.npz               # extracted training features
+└── retrain.sh                # end-to-end: process clips → rebuild → retrain
 ```
 
 ## Running it
@@ -127,17 +138,37 @@ dog-vision/
 git clone https://github.com/xpartla/dog-vision.git
 cd dog-vision
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt          # or: pip install -e .
 
 # Annotate a recorded clip
-python process_video.py samples/dog.mp4     # → keypoints
-python classify_video.py samples/dog.mp4    # → posture-labeled video
+python -m dogvision.tools.process_video samples/dog.mp4    # → keypoints (.h5)
+python -m dogvision.tools.classify_video samples/dog.mp4 \
+    --posture-model models/posture_model.joblib            # → posture-labeled video
 ```
 
-DeepLabCut downloads the SuperAnimal weights (a few hundred MB) on first run.
-A CUDA-capable GPU is recommended for live use; CPU is fine for offline
-processing. Full setup, GPU notes, and per-tool flags are in
-**[HOWTO.md](HOWTO.md)**; training details are in **[TRAINING.md](TRAINING.md)**.
+Every tool runs as `python -m dogvision.tools.<name>` (or, after
+`pip install -e .`, as `dogvision-<name>`). Without `--posture-model`, the
+classifier falls back to interpretable geometric rules. DeepLabCut downloads the
+SuperAnimal weights (a few hundred MB) on first run; a CUDA-capable GPU is
+recommended for live use, while CPU is fine for offline processing.
+
+## Training your own model
+
+The shipped models come from 48 single-posture clips. To retrain on your own
+footage — film clips each holding one posture, where the folder name becomes the
+label — chain the three stages (or just run `./retrain.sh`):
+
+```bash
+# 1. keypoints per clip, arranged as data/<label>/*.h5
+python -m dogvision.tools.process_video data/sitting/clip.mp4 --output-dir data/sitting
+# 2. clips → feature dataset (--stride skips near-duplicate frames; --augment-flip mirrors orientation)
+python -m dogvision.tools.build_dataset data/ --out dataset.npz --stride 2 --augment-flip
+# 3. train + evaluate, grouped by clip so scores reflect unseen-clip generalization
+python -m dogvision.tools.train_posture dataset.npz --model rf --out models/posture_model.joblib
+```
+
+The classifier is only as viewpoint-robust as the data, so vary camera angle,
+height, distance, and the dog's orientation across clips.
 
 ## Roadmap
 
