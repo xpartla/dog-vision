@@ -16,6 +16,12 @@ dlc-models/
 # Inference outputs
 output/
 
+# Labeled training footage (2.5 GB of raw clips; dataset.npz is the committed artifact)
+data/
+
+# Retraining logs
+retrain.log
+
 # Test footage (commit deliberately with `git add -f` if needed)
 samples/*.mp4
 samples/*.mov

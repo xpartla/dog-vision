@@ -1,145 +1,147 @@
 # dog-vision
 
-Real-time pose landmark detection on a dog (Australian Shepherd), built on
-SuperAnimal-Quadruped via DeepLabCut.
+**Real-time pose estimation and posture classification for dogs.** A markerless
+computer-vision pipeline that tracks ~39 body keypoints on a dog from ordinary
+video, then classifies its posture — sitting, standing, or lying — frame by
+frame, robust to camera angle, fur, and the dog facing any direction.
 
-> **Just want to run it?** See [HOWTO.md](HOWTO.md) for setup and the
-> per-workflow commands.
+<p align="center">
+  <img src="assets/demo.gif" alt="Skeleton overlay with live posture label tracking a dog from standing to sitting" width="640">
+</p>
 
-## Roadmap
+<p align="center"><sub>Live skeleton overlay + posture label. The classifier follows in real time.</sub></p>
 
-1. **MVP — pose landmark overlay** (current scope)
-2. Pose classification: sitting, standing, lying, head tilt
-3. Gaze / attention (likely approximated via head/snout direction)
-4. Excitement meter: body velocity, head oscillation, tail movement
+---
 
-## Two machines, two roles
+## What it does
 
-| Machine | Hardware | Role |
-|---|---|---|
-| Dev | WSL2, CPU only | Write code, process pre-recorded videos |
-| Run | Laptop with NVIDIA RTX 2060/3060 | Live webcam inference |
+- **Markerless pose tracking** — locates ~39 keypoints (ears, eyes, snout,
+  spine, hips, four limbs, three tail landmarks) on a dog in each frame, using
+  the [SuperAnimal-Quadruped](https://www.nature.com/articles/s41467-024-48792-2)
+  model via [DeepLabCut](https://www.deeplabcut.org/).
+- **Posture classification** — turns those raw keypoints into a `sitting` /
+  `standing` / `lying` label, plus a head-tilt readout, on every frame.
+- **Viewpoint-robust by design** — the classifier reads *relative geometry*
+  (joint angles, body aspect ratio, spine pitch), not pixel positions, so it
+  survives the dog rotating, walking toward or away from the camera, and a
+  tripod set at an arbitrary height.
+- **Graceful degradation** — when fur occludes a keypoint, the affected
+  features are dropped and the model votes on what survives, falling back to
+  `unknown` rather than guessing.
+- **Runs offline or live** — batch-annotate recorded clips, or stream a live
+  webcam overlay to the browser.
 
-Native USB webcams are not exposed to WSL2 by default. On the run machine,
-either run on native Windows (Python + a CUDA build of PyTorch) or set up
-`usbipd-win` to forward the camera into WSL2.
+## How it works
 
-## Setup (both machines)
-
-```bash
-git clone <your-github-url> dog-vision
-cd dog-vision
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+```
+ video frame
+     │
+     ▼
+┌─────────────────────┐   ~39 keypoints + confidences
+│ SuperAnimal-Quadruped│ ─────────────────────────────┐
+│   (DeepLabCut)       │                               │
+└─────────────────────┘                               ▼
+                                            ┌───────────────────────┐
+                                            │ feature engineering   │
+                                            │ 128 viewpoint-robust   │
+                                            │ features (angles,      │
+                                            │ ratios, distances)     │
+                                            └───────────┬───────────┘
+                                                        ▼
+                                            ┌───────────────────────┐
+                                            │ posture classifier     │
+                                            │ Random Forest / MLP    │
+                                            └───────────┬───────────┘
+                                                        ▼
+                                            ┌───────────────────────┐
+                                            │ temporal smoothing     │
+                                            │ (sliding-window vote)  │
+                                            └───────────┬───────────┘
+                                                        ▼
+                                                annotated frame
 ```
 
-DeepLabCut downloads the SuperAnimal-Quadruped weights (a few hundred MB) on
-first run, into a cache outside this repo.
+**Learned classifier** A Random Forest / MLP trained on labeled clips.
 
-### GPU acceleration on the run machine
+**Feature engineering over raw coordinates.** Rather than feed pixel locations
+to the model, the pipeline derives 128 features that are invariant to where the
+dog is in the frame and which way it faces — back-knee angle, hip-above-paws,
+spine pitch, body height/width ratio, eye-line vs. head axis, and more. This is
+what lets a model trained on a handful of clips generalize to new camera setups.
 
-PyTorch's pip wheel auto-selects CUDA on most systems. If
-`python -c "import torch; print(torch.cuda.is_available())"` prints `False`
-despite the GPU being present, install a CUDA wheel explicitly:
+**Honest evaluation.** Models are scored by **held-out clip**, never by
+held-out frame — frames from the same clip are near-duplicates, so a frame
+split would massively overstate accuracy. Reported numbers reflect
+generalization to *unseen recordings*.
 
-```bash
-pip install --upgrade torch --index-url https://download.pytorch.org/whl/cu121
-```
+## Results
 
-## Scripts
+Trained on ~10k labeled frames from ~50 clips across 3 postures, evaluated on
+clips the model never saw during training:
 
-### `process_video.py` — offline processing
+| Metric | Score |
+|---|---|
+| Grouped 5-fold CV accuracy | **~75%** (±9%) |
+| Held-out test accuracy (unseen clips) | **~77%** |
+| `sitting` recall | ~0.97 |
+| `standing` recall | ~0.80 |
+| `lying` recall | ~0.65 |
 
-Process a video file end-to-end and write an annotated copy.
+The main confusion is `lying` ↔ `standing` from elevated camera angles underrepresented in the training set.
 
-```bash
-python process_video.py samples/dog.mp4
-# → output/<dog>_<model>.mp4 + .h5 with raw keypoint predictions
-```
+## Tech stack
 
-This is the safe path that works on either machine and uses DLC's documented
-public API.
+`Python` · `DeepLabCut` (SuperAnimal-Quadruped, PyTorch backend) ·
+`scikit-learn` (Random Forest, MLP) · `OpenCV` · `NumPy` / `pandas`
 
-### `webcam_record.py` — capture from webcam
+## Engineering notes
 
-Record raw footage to a file. Useful on the run machine.
+A few problems that were more interesting than they first looked:
 
-```bash
-python webcam_record.py --output samples/dog.mp4 --duration 30
-```
+- **Real-time on a chunked API.** DeepLabCut's high-level inference call reloads
+  the model from disk per invocation. `live_webcam.py` works around this by
+  processing short webcam chunks pipelined with playback (~2 s latency on an RTX
+  3060).
+- **Temporal smoothing.** Per-frame predictions flicker; a sliding-window
+  majority vote suppresses jitter without adding noticeable lag.
 
-### `live_webcam.py` — chunked live overlay
-
-Captures short chunks from the webcam, runs SuperAnimal, plays back the
-annotated chunk, repeats. Total latency is approximately
-`chunk-seconds + inference-time` (≈2s on a 3060). Functional for an MVP demo;
-not yet true frame-by-frame.
-
-```bash
-python live_webcam.py
-# Tweaks:
-python live_webcam.py --chunk-seconds 1.0 --model hrnet_w32
-```
-
-### `classify_video.py` — phase 2: posture and head-tilt labels
-
-Reads the `.h5` predictions written by `process_video.py` and produces a new
-annotated video tagged with posture (sitting / standing / lying / unknown) and
-head tilt (upright / tilt_left / tilt_right / unknown). Rule-based geometry
-over keypoint angles, with sliding-window majority voting to suppress flicker.
-
-```bash
-# Auto-discovers output/<stem>*.h5
-python classify_video.py samples/Video1.mp4
-
-# Inspect the bodypart names DLC actually wrote (verify they match
-# the constants at the top of posture.py)
-python classify_video.py samples/Video1.mp4 --list-keypoints
-
-# Show per-feature numeric values on each frame for tuning
-python classify_video.py samples/Video1.mp4 --debug
-```
-
-Designed for the live-demo setup: tripod at ~ribcage height, slight downward
-tilt, dog free to face any direction. Features used (body H/W, back-knee
-angle, hip-above-paws, spine pitch, eye-line vs. head axis) are all relative
-geometry, not absolute pixel positions, so they survive dog rotation. When
-keypoints are occluded by Aussie fur, the missing features are simply skipped
-and the classifier votes with what it has — falling back to `unknown` rather
-than guessing if too few features survive.
-
-## Path to true real-time
-
-`live_webcam.py` is chunked because the high-level
-`deeplabcut.video_inference_superanimal` API loads the model from disk on each
-call. To reach 30 fps frame-by-frame, the next iteration needs to keep the
-PyTorch model resident in memory and skip file I/O — i.e., a thin wrapper
-around DLC's lower-level pose-estimation classes. That refactor is deferred
-until the chunked pipeline is verified end-to-end.
-
-## Phases 2–4 keypoint coverage
-
-SuperAnimal-Quadruped predicts ~39 keypoints including separate points for
-both ears, snout, eyes, neck, spine, hips, four limbs, and three tail
-landmarks (base / mid / tip). That set covers everything the later phases
-need:
-
-- Phase 2 (head tilt / sitting): ear / spine / hip angles
-- Phase 3 (attention proxy): eyes + snout direction
-- Phase 4 (excitement): tail-tip oscillation, head oscillation, body
-  centroid velocity
-
-## Layout
+## Repo layout
 
 ```
 dog-vision/
-├── .gitignore
-├── .gitattributes
-├── README.md
-├── requirements.txt
-├── process_video.py
-├── webcam_record.py
-├── live_webcam.py
-└── samples/        # local-only test footage (gitignored)
+├── process_video.py     # run SuperAnimal on a video → keypoints (.h5)
+├── pose_features.py     # 128-feature vector from raw keypoints
+├── posture.py           # Frame/Keypoint model, classifiers, smoothing
+├── classify_video.py    # annotate a video with posture labels
+├── live_webcam.py       # live chunked webcam overlay (→ browser via MJPEG)
+├── build_dataset.py     # labeled clips → dataset.npz
+├── train_posture.py     # train RF / MLP, grouped CV, confusion matrix
+├── retrain.sh           # end-to-end: process clips → rebuild → retrain
+├── posture_model.joblib # trained classifier (committed, ready to run)
+└── dataset.npz          # extracted training features
 ```
+
+## Running it
+
+```bash
+git clone https://github.com/xpartla/dog-vision.git
+cd dog-vision
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# Annotate a recorded clip
+python process_video.py samples/dog.mp4     # → keypoints
+python classify_video.py samples/dog.mp4    # → posture-labeled video
+```
+
+DeepLabCut downloads the SuperAnimal weights (a few hundred MB) on first run.
+A CUDA-capable GPU is recommended for live use; CPU is fine for offline
+processing. Full setup, GPU notes, and per-tool flags are in
+**[HOWTO.md](HOWTO.md)**; training details are in **[TRAINING.md](TRAINING.md)**.
+
+## Roadmap
+
+1. ✅ Pose landmark overlay
+2. ✅ Posture classification (sitting / standing / lying) + head tilt
+3. ⬜ Gaze / attention proxy via head + snout direction
+4. ⬜ Excitement meter: body velocity, head oscillation, tail movement
