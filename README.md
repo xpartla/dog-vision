@@ -97,20 +97,6 @@ training set, which is the clearest lever for the next round of data collection.
 `Python` · `DeepLabCut` (SuperAnimal-Quadruped, PyTorch backend) ·
 `scikit-learn` (Random Forest, MLP) · `OpenCV` · `NumPy` / `pandas`
 
-## Engineering notes
-
-A few problems that were more interesting than they first looked:
-
-- **Keeping the model resident.** DeepLabCut's high-level inference call
-  reloads the model from disk per invocation — unusable for live video.
-  `SuperAnimalInferencer` loads the detector + pose runners once and infers on
-  single frames; with capture, inference, and display on separate threads,
-  live latency drops to roughly single-frame inference time (~100–300 ms on an
-  RTX 3060) instead of chunk length (~2 s). A proper measured benchmark table
-  is planned ([PLAN.md](PLAN.md), WP6).
-- **Temporal smoothing.** Per-frame predictions flicker; a sliding-window
-  majority vote suppresses jitter without adding noticeable lag.
-
 ## Repo layout
 
 ```
@@ -133,7 +119,6 @@ dog-vision/
 ├── assets/                   # demo media
 ├── dataset.npz               # extracted training features
 ├── retrain.sh                # end-to-end: process clips → rebuild → retrain
-└── PLAN.md                   # roadmap: work packages for the phases below
 ```
 
 ## Running it
@@ -176,7 +161,7 @@ python -m dogvision.tools.train_posture dataset.npz --model rf --out models/post
 The classifier is only as viewpoint-robust as the data, so vary camera angle,
 height, distance, and the dog's orientation across clips.
 
-## Research direction
+## Future direction
 
 The next phases move from classifying posture *snapshots* to modeling movement
 *dynamics*: a self-supervised sequence model over the keypoint trajectories
@@ -198,8 +183,6 @@ The evaluation protocol comes first, not last:
 - **Grouped splits, always** — sequences from one recording session never
   straddle a train/test split, and an external public-video eval set keeps the
   numbers honest beyond one dog.
-
-The full work-package breakdown lives in [PLAN.md](PLAN.md).
 
 ## Roadmap
 
