@@ -20,7 +20,7 @@ frame, robust to camera angle, fur, and the dog facing any direction.
   the [SuperAnimal-Quadruped](https://www.nature.com/articles/s41467-024-48792-2)
   model via [DeepLabCut](https://www.deeplabcut.org/).
 - **Posture classification** — turns those raw keypoints into a `sitting` /
-  `standing` / `lying` label, plus a head-tilt readout, on every frame.
+  `standing` / `lying` label on every frame.
 - **Viewpoint-robust by design** — the classifier reads *relative geometry*
   (joint angles, body aspect ratio, spine pitch), not pixel positions, so it
   survives the dog rotating, walking toward or away from the camera, and a
@@ -101,10 +101,13 @@ training set, which is the clearest lever for the next round of data collection.
 
 A few problems that were more interesting than they first looked:
 
-- **Real-time on a chunked API.** DeepLabCut's high-level inference call reloads
-  the model from disk per invocation. `live_webcam.py` works around this by
-  processing short webcam chunks pipelined with playback (~2 s latency on an RTX
-  3060).
+- **Keeping the model resident.** DeepLabCut's high-level inference call
+  reloads the model from disk per invocation — unusable for live video.
+  `SuperAnimalInferencer` loads the detector + pose runners once and infers on
+  single frames; with capture, inference, and display on separate threads,
+  live latency drops to roughly single-frame inference time (~100–300 ms on an
+  RTX 3060) instead of chunk length (~2 s). A proper measured benchmark table
+  is planned ([PLAN.md](PLAN.md), WP6).
 - **Temporal smoothing.** Per-frame predictions flicker; a sliding-window
   majority vote suppresses jitter without adding noticeable lag.
 
@@ -129,7 +132,8 @@ dog-vision/
 ├── models/                   # trained classifiers (committed, ready to run)
 ├── assets/                   # demo media
 ├── dataset.npz               # extracted training features
-└── retrain.sh                # end-to-end: process clips → rebuild → retrain
+├── retrain.sh                # end-to-end: process clips → rebuild → retrain
+└── PLAN.md                   # roadmap: work packages for the phases below
 ```
 
 ## Running it
@@ -172,9 +176,37 @@ python -m dogvision.tools.train_posture dataset.npz --model rf --out models/post
 The classifier is only as viewpoint-robust as the data, so vary camera angle,
 height, distance, and the dog's orientation across clips.
 
+## Research direction
+
+The next phases move from classifying posture *snapshots* to modeling movement
+*dynamics*: a self-supervised sequence model over the keypoint trajectories
+this pipeline already produces, treating movement as a **continuous-time
+latent process** (latent Neural ODE/CDE) — so dropped frames, occlusions, and
+variable frame rates are handled natively rather than as special cases.
+
+The evaluation protocol comes first, not last:
+
+- **Baselines before models.** Forecasting error (normalized by dog scale) at
+  fixed horizons — 100 ms to 1 s — against freeze, constant-velocity, GRU, and
+  small-transformer baselines. A result is a delta, not a demo.
+- **Representation probes.** The existing labeled posture dataset becomes a
+  benchmark: linear probe on the learned latents vs. the shipped 128
+  hand-crafted features + Random Forest. Does self-supervision beat feature
+  engineering here? Either answer is a result.
+- **Behavioral structure.** Unsupervised segmentation of the latent
+  trajectories into discrete states, rendered as per-session ethograms.
+- **Grouped splits, always** — sequences from one recording session never
+  straddle a train/test split, and an external public-video eval set keeps the
+  numbers honest beyond one dog.
+
+The full work-package breakdown lives in [PLAN.md](PLAN.md).
+
 ## Roadmap
 
 1. ✅ Pose landmark overlay
-2. ✅ Posture classification (sitting / standing / lying) + head tilt
-3. ⬜ Gaze / attention proxy via head + snout direction
-4. ⬜ Excitement meter: body velocity, head oscillation, tail movement
+2. ✅ Posture classification (sitting / standing / lying), viewpoint-robust
+3. ⬜ Movement dynamics: continuous-time latent model forecasting future
+   keypoints, evaluated against velocity / GRU / transformer baselines at
+   fixed horizons
+4. ⬜ Behavioral structure: representation probes, unsupervised segmentation,
+   external-dataset evaluation
