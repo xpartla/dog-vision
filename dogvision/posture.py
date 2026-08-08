@@ -1,6 +1,6 @@
 """Phase-2 posture classification on top of SuperAnimal-Quadruped keypoints.
 
-Rule-based classifier: sitting / standing / lying / head tilt. Each feature is
+Rule-based classifier: sitting / standing / lying. Each feature is
 computed independently and gracefully returns None when its keypoints are
 missing or low-confidence; the classifier ensembles whatever survived. Sliding
 window majority voting smooths the per-frame labels.
@@ -25,10 +25,7 @@ import math
 from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
-
-if TYPE_CHECKING:
-    from .orientation import OrientationResult
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -599,65 +596,6 @@ class LearnedPostureClassifier:
                 label, p = self._classes[best], float(proba[best])
                 results[idx] = (label, p) if p >= self.min_proba else ("unknown", p)
         return results
-
-
-# === Head tilt ==============================================================
-
-HEAD_TILT_LABELS = ("upright", "tilt_left", "tilt_right", "unknown")
-
-
-def classify_head_tilt(
-    frame: Frame,
-    tilt_threshold_deg: float = 15.0,
-    orientation: Optional[OrientationResult] = None,
-) -> tuple[str, float]:
-    """Tilt of the eye-line relative to (perpendicular-to-head-axis).
-
-    Returns (label, signed-tilt-deg). Sign convention: positive = right side
-    lower in image space; negative = left side lower.
-
-    When `orientation` is supplied and the dog is mostly in profile
-    (bilateral_conf < 0.25), the eye-line measurement is unreliable and
-    "unknown" is returned instead of a likely-wrong label.
-    """
-    if orientation is not None and orientation.bilateral_conf < 0.25:
-        return ("unknown", 0.0)
-
-    nose = frame.get(KP_NOSE)
-    neck = frame.get(KP_NECK_BASE)
-    le = frame.get(KP_LEFT_EYE)
-    re = frame.get(KP_RIGHT_EYE)
-    if not le or not re:
-        le = frame.get(KP_LEFT_EAR_BASE) or le
-        re = frame.get(KP_RIGHT_EAR_BASE) or re
-
-    if not (nose and neck and le and re):
-        return ("unknown", 0.0)
-
-    head_axis = _vec(nose, neck)
-    head_len = float(np.linalg.norm(head_axis))
-    if head_len < 5.0:
-        return ("unknown", 0.0)
-
-    eye_axis = _vec(le, re)
-    if float(np.linalg.norm(eye_axis)) < 1e-6:
-        return ("unknown", 0.0)
-
-    head_perp = np.array([-head_axis[1], head_axis[0]])
-    head_perp /= float(np.linalg.norm(head_perp))
-
-    eye_norm = eye_axis / float(np.linalg.norm(eye_axis))
-    cos = float(np.clip(np.dot(eye_norm, head_perp), -1.0, 1.0))
-    sin = float(eye_norm[0] * head_perp[1] - eye_norm[1] * head_perp[0])
-    angle_deg = math.degrees(math.atan2(sin, cos))
-    if angle_deg > 90:
-        angle_deg -= 180
-    elif angle_deg < -90:
-        angle_deg += 180
-
-    if abs(angle_deg) < tilt_threshold_deg:
-        return ("upright", angle_deg)
-    return (("tilt_left" if angle_deg > 0 else "tilt_right"), angle_deg)
 
 
 # === Sliding-window smoothing ==============================================

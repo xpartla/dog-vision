@@ -1,7 +1,4 @@
-deeplabcut>=3.0.0rc14
-opencv-python>=4.8.0
-numpy>=1.24.0
-pandas>=2.0.0
-tables>=3.8.0
-scikit-learn>=1.3
-joblib>=1.3
+# Convenience file for the FULL install (classifier + DeepLabCut pose stack,
+# ~3 GB with torch). For the lightweight classifier-only install, use:
+#   pip install -e .
+-e .[pose]

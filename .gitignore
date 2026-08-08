@@ -7,6 +7,15 @@ venv/
 .env
 .python-version
 
+# Debris from accidentally running `python -m venv .` at the repo root
+/bin/
+/lib/
+/lib64
+/include/
+/share/
+/pyvenv.cfg
+/dlclibrary/
+
 # DeepLabCut / model caches (downloaded on first run; not part of the repo)
 .dlc/
 dlc-models/

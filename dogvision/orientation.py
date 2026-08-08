@@ -5,9 +5,7 @@ Two orthogonal signals:
   bilateral spread  — distance between ear/eye pairs relative to spine length;
                       large when the dog faces the camera, small in profile.
 
-OrientationResult drives the compass widget in overlay.py and gates the
-head-tilt estimate in posture.py (tilt is only meaningful when the dog is
-at least partially face-on).
+OrientationResult drives the compass widget in overlay.py.
 """
 
 from __future__ import annotations

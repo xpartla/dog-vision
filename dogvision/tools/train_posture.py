@@ -28,8 +28,10 @@ from sklearn.preprocessing import StandardScaler
 
 def build_model(kind: str):
     if kind == "rf":
+        # Regularized so the saved forest stays a few MB instead of tens of MB;
+        # held-out macro-F1 matches the unregularized config on this dataset.
         return RandomForestClassifier(
-            n_estimators=400, max_depth=None, min_samples_leaf=2,
+            n_estimators=200, max_depth=12, min_samples_leaf=4,
             class_weight="balanced", n_jobs=-1, random_state=0,
         )
     if kind == "mlp":
@@ -113,7 +115,7 @@ def main() -> None:
         "feature_version": len(feature_names),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, args.out)
+    joblib.dump(bundle, args.out, compress=3)
     print(f"\nSaved model to {args.out.resolve()}")
     print("Use it with:  python -m dogvision.tools.classify_video <video> --posture-model "
           f"{args.out}")

@@ -82,7 +82,7 @@ def main() -> None:
     parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD,
                         help="Min keypoint likelihood for posture features")
     parser.add_argument("--smooth-window", type=int, default=10,
-                        help="Majority-vote window size (frames) for posture/tilt labels")
+                        help="Majority-vote window size (frames) for posture labels")
     parser.add_argument("--no-smooth-keypoints", action="store_true",
                         help="Disable 1-Euro smoothing of keypoint trajectories")
     parser.add_argument("--smooth-mincutoff", type=float, default=1.0)

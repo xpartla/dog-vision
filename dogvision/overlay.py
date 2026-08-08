@@ -1,4 +1,4 @@
-"""Drawing utilities: keypoints, skeleton, posture/tilt labels, and orientation compass."""
+"""Drawing utilities: keypoints, skeleton, posture labels, and orientation compass."""
 
 from __future__ import annotations
 
@@ -131,8 +131,8 @@ def draw_orientation_compass(
       - dot at the center → dog faces toward/away from camera (spine foreshortened)
 
     Dot color encodes bilateral_conf:
-      - green   (bilateral_conf → 1) : face-on; head-tilt label is reliable
-      - grey    (bilateral_conf → 0) : profile; head-tilt label is unreliable
+      - green   (bilateral_conf → 1) : face-on; both body sides visible
+      - grey    (bilateral_conf → 0) : profile; one side mostly occluded
     """
     h, w = image.shape[:2]
     radius = max(35, round(_scale(image, 50)))

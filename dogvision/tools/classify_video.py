@@ -1,6 +1,6 @@
 """Phase-2 entry point: read DLC predictions for a video, classify posture
-and head tilt per frame, and write an annotated output video with the full
-keypoint overlay drawn on top.
+per frame, and write an annotated output video with the full keypoint overlay
+drawn on top.
 
 Run after `process_video.py` has produced an .h5 prediction file.
 

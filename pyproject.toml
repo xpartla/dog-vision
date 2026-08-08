@@ -7,16 +7,29 @@ name = "dog-vision"
 version = "0.1.0"
 description = "Markerless dog pose estimation and posture classification (SuperAnimal-Quadruped + scikit-learn)"
 readme = "README.md"
-requires-python = ">=3.9"
+license = { text = "MIT" }
+# Floor set by the scikit-learn pin below (sklearn 1.9 requires >=3.11).
+requires-python = ">=3.11"
+# Core install: everything that works from keypoints (.h5) — classify_video,
+# build_dataset, train_posture, webcam_record. The ~3 GB torch/DeepLabCut
+# stack is only needed to *produce* keypoints; install it via the `pose` extra.
 dependencies = [
-    "deeplabcut>=3.0.0rc14",
-    "opencv-python>=4.8.0",
-    "numpy>=1.24.0",
-    "pandas>=2.0.0",
-    "tables>=3.8.0",
-    "scikit-learn>=1.3",
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "tables>=3.8",
+    # Pinned to a minor range so the shipped .joblib model bundles stay
+    # loadable — sklearn pickles are not guaranteed stable across versions.
+    "scikit-learn>=1.9,<1.10",
     "joblib>=1.3",
+    "opencv-python>=4.8",
 ]
+
+[project.optional-dependencies]
+# Pose estimation (process_video, live_webcam): pulls in torch + DeepLabCut.
+pose = ["deeplabcut>=3.0.0rc14"]
+# Movement-dynamics research track (declared ahead of use; see PLAN.md WP3+).
+dynamics = ["torch", "torchdiffeq", "torchcde"]
+dev = ["pytest", "hypothesis", "ruff"]
 
 # Optional: `pip install -e .` exposes these as commands. Without installing,
 # every tool also runs as `python -m dogvision.tools.<name>`.

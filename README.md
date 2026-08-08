@@ -83,12 +83,12 @@ classifiers train from the same 128-feature vectors:
 
 | Model | Grouped 5-fold CV | Held-out test acc. | Macro F1 | Recall — lying / sitting / standing |
 |---|---|---|---|---|
-| **Random Forest** (shipped default) | **76%** (±8%) | **80%** | **0.81** | 0.72 / 0.97 / 0.82 |
-| MLP (128→64) | 76% (±6%) | 75% | 0.75 | 0.68 / 0.98 / 0.72 |
+| **Random Forest** (shipped default) | **76%** (±8%) | **80%** | **0.81** | 0.72 / 0.96 / 0.81 |
+| MLP (128→64) | 76% (±6%) | 79% | 0.79 | 0.73 / 0.96 / 0.78 |
 
-The Random Forest generalizes better to unseen clips and is the default; the MLP
-trains with slightly tighter cross-validation variance but trails on held-out
-accuracy. Both nail `sitting` and share the same weak spot — `lying` ↔
+The Random Forest generalizes slightly better to unseen clips and is the
+default; the MLP trains with tighter cross-validation variance but trails on
+held-out accuracy. Both nail `sitting` and share the same weak spot — `lying` ↔
 `standing` confusion from elevated camera angles underrepresented in the
 training set, which is the clearest lever for the next round of data collection.
 
@@ -127,7 +127,9 @@ dog-vision/
 git clone https://github.com/xpartla/dog-vision.git
 cd dog-vision
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # or: pip install -e .
+
+# Full install — pose estimation + classification (~3 GB with torch/DeepLabCut):
+pip install -e .[pose]                   # or: pip install -r requirements.txt
 
 # 1. Pose estimation: video → keypoints (.h5 in output/)
 python -m dogvision.tools.process_video samples/dog.mp4
@@ -137,9 +139,18 @@ python -m dogvision.tools.classify_video samples/dog.mp4 \
     --posture-model models/posture_model.joblib
 ```
 
+The pose stack is only needed to *produce* keypoints. Everything downstream —
+classification, dataset building, training — runs from `.h5` keypoint files on
+a lightweight install without torch or DeepLabCut:
+
+```bash
+pip install -e .        # classifier-only: classify_video, build_dataset, train_posture
+```
+
 Every tool runs as `python -m dogvision.tools.<name>` (or, after
 `pip install -e .`, as `dogvision-<name>`). Without `--posture-model`, the
-classifier falls back to interpretable geometric rules. DeepLabCut downloads the
+classifier falls back to interpretable geometric rules. Rendering the annotated
+output video requires `ffmpeg` on the PATH. DeepLabCut downloads the
 SuperAnimal weights (a few hundred MB) on first run; a CUDA-capable GPU is
 recommended for live use, while CPU is fine for offline processing.
 
@@ -193,3 +204,16 @@ The evaluation protocol comes first, not last:
    fixed horizons
 4. ⬜ Behavioral structure: representation probes, unsupervised segmentation,
    external-dataset evaluation
+
+## License
+
+The code in this repository is released under the [MIT License](LICENSE).
+
+Third-party components have their own terms:
+
+- [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) is LGPL-3.0 and is
+  used here as an unmodified library dependency.
+- The SuperAnimal-Quadruped weights are downloaded at runtime from the
+  DeepLabCut Model Zoo and are distributed under the Model Zoo's own terms —
+  verify those terms before redistributing the weights or shipping a hosted
+  demo that bundles them.
