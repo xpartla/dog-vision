@@ -45,22 +45,22 @@ def main() -> None:
         "--video-adapt",
         action="store_true",
         help="Fine-tune the model on the video using its own pseudo-labels. "
-             "Significantly reduces keypoint jitter at the cost of much longer "
-             "runtime. Recommended for final renders, not for iterative tuning.",
+        "Significantly reduces keypoint jitter at the cost of much longer "
+        "runtime. Recommended for final renders, not for iterative tuning.",
     )
     parser.add_argument(
         "--video-adapt-batch-size",
         type=int,
         default=None,
         help="Adaptation training batch size. DLC's default is 8, which OOMs "
-             "the detector training on a 6-12 GB GPU. Try 1 or 2 if you hit "
-             "CUDA out-of-memory during --video-adapt.",
+        "the detector training on a 6-12 GB GPU. Try 1 or 2 if you hit "
+        "CUDA out-of-memory during --video-adapt.",
     )
     parser.add_argument(
         "--device",
         default="auto",
         help="Device for inference: 'auto' (default, uses GPU if available), "
-             "'cpu', or 'cuda'. Use 'cpu' if CUDA causes a segfault.",
+        "'cpu', or 'cuda'. Use 'cpu' if CUDA causes a segfault.",
     )
     args = parser.parse_args()
 

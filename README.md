@@ -1,5 +1,7 @@
 # dog-vision
 
+[![CI](https://github.com/xpartla/dog-vision/actions/workflows/ci.yml/badge.svg)](https://github.com/xpartla/dog-vision/actions/workflows/ci.yml)
+
 **Real-time pose estimation and posture classification for dogs.** A markerless
 computer-vision pipeline that tracks ~39 body keypoints on a dog from ordinary
 video, then classifies its posture — sitting, standing, or lying — frame by

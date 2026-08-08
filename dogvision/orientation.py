@@ -12,24 +12,34 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
 from .posture import (
+    KP_BACK_BASE,
+    KP_BACK_END,
+    KP_BACK_MIDDLE,
+    KP_LEFT_EAR_BASE,
+    KP_LEFT_EYE,
+    KP_NECK_BASE,
+    KP_NOSE,
+    KP_RIGHT_EAR_BASE,
+    KP_RIGHT_EYE,
+    KP_TAIL_BASE,
+    KP_TAIL_END,
     Frame,
-    KP_NOSE, KP_NECK_BASE,
-    KP_BACK_BASE, KP_BACK_MIDDLE, KP_BACK_END,
-    KP_TAIL_BASE, KP_TAIL_END,
-    KP_LEFT_EAR_BASE, KP_RIGHT_EAR_BASE,
-    KP_LEFT_EYE, KP_RIGHT_EYE,
 )
 
 # Spine keypoints in anatomical order (head end → tail end).
 # PCA over all visible members is far more stable than a single 2-point vector.
 _SPINE_KPS = [
-    KP_NOSE, KP_NECK_BASE, KP_BACK_BASE, KP_BACK_MIDDLE,
-    KP_BACK_END, KP_TAIL_BASE, KP_TAIL_END,
+    KP_NOSE,
+    KP_NECK_BASE,
+    KP_BACK_BASE,
+    KP_BACK_MIDDLE,
+    KP_BACK_END,
+    KP_TAIL_BASE,
+    KP_TAIL_END,
 ]
 
 
@@ -45,6 +55,7 @@ class OrientationResult:
                       (1 = pure profile, 0 = face-on / fully foreshortened)
     confidence      : overall signal quality (0 = too few keypoints to estimate)
     """
+
     spine_angle_deg: float
     bilateral_conf: float
     spine_len_ratio: float
@@ -144,10 +155,10 @@ class OrientationSmoother:
         """
         self.angle_alpha = angle_alpha
         self.conf_alpha = conf_alpha
-        self._cos: Optional[float] = None
-        self._sin: Optional[float] = None
-        self._bilateral: Optional[float] = None
-        self._spine_ratio: Optional[float] = None
+        self._cos: float | None = None
+        self._sin: float | None = None
+        self._bilateral: float | None = None
+        self._spine_ratio: float | None = None
 
     def smooth(self, result: OrientationResult) -> OrientationResult:
         if result.confidence < 0.1:

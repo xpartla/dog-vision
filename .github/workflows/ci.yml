@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor is set by the scikit-learn 1.9 pin (requires >=3.11).
+        # DeepLabCut is never installed here — the core install is all the
+        # tests need, which keeps CI runs at ~2 minutes.
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e .[dev]
+
+      - name: Lint
+        run: ruff check dogvision/ tests/
+
+      - name: Format check
+        run: ruff format --check dogvision/ tests/
+
+      - name: Tests
+        run: pytest

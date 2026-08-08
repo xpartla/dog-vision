@@ -24,21 +24,34 @@ front-on camera, where image-y stopped meaning "height"):
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import numpy as np
 
 from .posture import (
+    KP_BACK_BASE,
+    KP_BACK_END,
+    KP_BACK_LEFT_KNEE,
+    KP_BACK_LEFT_PAW,
+    KP_BACK_LEFT_THIGH,
+    KP_BACK_MIDDLE,
+    KP_BACK_RIGHT_KNEE,
+    KP_BACK_RIGHT_PAW,
+    KP_BACK_RIGHT_THIGH,
+    KP_FRONT_LEFT_KNEE,
+    KP_FRONT_LEFT_PAW,
+    KP_FRONT_LEFT_THIGH,
+    KP_FRONT_RIGHT_KNEE,
+    KP_FRONT_RIGHT_PAW,
+    KP_FRONT_RIGHT_THIGH,
+    KP_LEFT_EAR_BASE,
+    KP_LEFT_EYE,
+    KP_NECK_BASE,
+    KP_NOSE,
+    KP_RIGHT_EAR_BASE,
+    KP_RIGHT_EYE,
+    KP_TAIL_BASE,
+    KP_TAIL_END,
     Frame,
-    KP_NOSE, KP_LEFT_EYE, KP_RIGHT_EYE, KP_LEFT_EAR_BASE, KP_RIGHT_EAR_BASE,
-    KP_NECK_BASE, KP_BACK_BASE, KP_BACK_MIDDLE, KP_BACK_END,
-    KP_TAIL_BASE, KP_TAIL_END,
-    KP_FRONT_LEFT_THIGH, KP_FRONT_RIGHT_THIGH,
-    KP_FRONT_LEFT_KNEE, KP_FRONT_RIGHT_KNEE,
-    KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW,
-    KP_BACK_LEFT_THIGH, KP_BACK_RIGHT_THIGH,
-    KP_BACK_LEFT_KNEE, KP_BACK_RIGHT_KNEE,
-    KP_BACK_LEFT_PAW, KP_BACK_RIGHT_PAW,
     _angle_at,
 )
 
@@ -55,15 +68,36 @@ KP_BODY_MIDDLE_RIGHT = "body_middle_right"
 # Ordered keypoints whose normalized (x, y, visible) become features. Order is
 # frozen — changing it invalidates saved models, so append, never reorder.
 COORD_KEYPOINTS: tuple[str, ...] = (
-    KP_NOSE, KP_UPPER_JAW, KP_LOWER_JAW, KP_LEFT_EYE, KP_RIGHT_EYE,
-    KP_LEFT_EAR_BASE, KP_RIGHT_EAR_BASE,
-    KP_NECK_BASE, KP_NECK_END, KP_THROAT_BASE,
-    KP_BACK_BASE, KP_BACK_MIDDLE, KP_BACK_END, KP_TAIL_BASE, KP_TAIL_END,
-    KP_BELLY_BOTTOM, KP_BODY_MIDDLE_LEFT, KP_BODY_MIDDLE_RIGHT,
-    KP_FRONT_LEFT_THIGH, KP_FRONT_LEFT_KNEE, KP_FRONT_LEFT_PAW,
-    KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE, KP_FRONT_RIGHT_PAW,
-    KP_BACK_LEFT_THIGH, KP_BACK_LEFT_KNEE, KP_BACK_LEFT_PAW,
-    KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE, KP_BACK_RIGHT_PAW,
+    KP_NOSE,
+    KP_UPPER_JAW,
+    KP_LOWER_JAW,
+    KP_LEFT_EYE,
+    KP_RIGHT_EYE,
+    KP_LEFT_EAR_BASE,
+    KP_RIGHT_EAR_BASE,
+    KP_NECK_BASE,
+    KP_NECK_END,
+    KP_THROAT_BASE,
+    KP_BACK_BASE,
+    KP_BACK_MIDDLE,
+    KP_BACK_END,
+    KP_TAIL_BASE,
+    KP_TAIL_END,
+    KP_BELLY_BOTTOM,
+    KP_BODY_MIDDLE_LEFT,
+    KP_BODY_MIDDLE_RIGHT,
+    KP_FRONT_LEFT_THIGH,
+    KP_FRONT_LEFT_KNEE,
+    KP_FRONT_LEFT_PAW,
+    KP_FRONT_RIGHT_THIGH,
+    KP_FRONT_RIGHT_KNEE,
+    KP_FRONT_RIGHT_PAW,
+    KP_BACK_LEFT_THIGH,
+    KP_BACK_LEFT_KNEE,
+    KP_BACK_LEFT_PAW,
+    KP_BACK_RIGHT_THIGH,
+    KP_BACK_RIGHT_KNEE,
+    KP_BACK_RIGHT_PAW,
 )
 
 # Joint-angle triplets (vertex is the middle point). Angles are translation,
@@ -71,22 +105,22 @@ COORD_KEYPOINTS: tuple[str, ...] = (
 # Order is frozen — append, never reorder.
 ANGLE_TRIPLETS: tuple[tuple[str, str, str], ...] = (
     # Original 8
-    (KP_BACK_LEFT_THIGH,  KP_BACK_LEFT_KNEE,   KP_BACK_LEFT_PAW),      # L hind stifle
-    (KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE,  KP_BACK_RIGHT_PAW),     # R hind stifle
-    (KP_FRONT_LEFT_THIGH, KP_FRONT_LEFT_KNEE,  KP_FRONT_LEFT_PAW),     # L fore
-    (KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE, KP_FRONT_RIGHT_PAW),   # R fore
-    (KP_NECK_BASE,        KP_BACK_BASE,         KP_BACK_MIDDLE),        # spine bend front
-    (KP_BACK_BASE,        KP_BACK_MIDDLE,       KP_BACK_END),           # spine bend rear
-    (KP_NECK_BASE,        KP_BACK_MIDDLE,       KP_TAIL_BASE),          # spine overall
-    (KP_NOSE,             KP_NECK_BASE,         KP_BACK_BASE),          # neck/head angle
+    (KP_BACK_LEFT_THIGH, KP_BACK_LEFT_KNEE, KP_BACK_LEFT_PAW),  # L hind stifle
+    (KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE, KP_BACK_RIGHT_PAW),  # R hind stifle
+    (KP_FRONT_LEFT_THIGH, KP_FRONT_LEFT_KNEE, KP_FRONT_LEFT_PAW),  # L fore
+    (KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE, KP_FRONT_RIGHT_PAW),  # R fore
+    (KP_NECK_BASE, KP_BACK_BASE, KP_BACK_MIDDLE),  # spine bend front
+    (KP_BACK_BASE, KP_BACK_MIDDLE, KP_BACK_END),  # spine bend rear
+    (KP_NECK_BASE, KP_BACK_MIDDLE, KP_TAIL_BASE),  # spine overall
+    (KP_NOSE, KP_NECK_BASE, KP_BACK_BASE),  # neck/head angle
     # New: hip angles (thigh as vertex, spine-end and knee as endpoints)
-    (KP_BACK_END,         KP_BACK_LEFT_THIGH,  KP_BACK_LEFT_KNEE),     # L hip
-    (KP_BACK_END,         KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE),    # R hip
+    (KP_BACK_END, KP_BACK_LEFT_THIGH, KP_BACK_LEFT_KNEE),  # L hip
+    (KP_BACK_END, KP_BACK_RIGHT_THIGH, KP_BACK_RIGHT_KNEE),  # R hip
     # New: shoulder angles (front thigh as vertex)
-    (KP_BACK_BASE,        KP_FRONT_LEFT_THIGH,  KP_FRONT_LEFT_KNEE),   # L shoulder
-    (KP_BACK_BASE,        KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE),  # R shoulder
+    (KP_BACK_BASE, KP_FRONT_LEFT_THIGH, KP_FRONT_LEFT_KNEE),  # L shoulder
+    (KP_BACK_BASE, KP_FRONT_RIGHT_THIGH, KP_FRONT_RIGHT_KNEE),  # R shoulder
     # New: tail carriage angle
-    (KP_BACK_END,         KP_TAIL_BASE,         KP_TAIL_END),           # tail
+    (KP_BACK_END, KP_TAIL_BASE, KP_TAIL_END),  # tail
 )
 
 # Normalized pairwise distances: (name, kp1, kp2).
@@ -94,13 +128,13 @@ ANGLE_TRIPLETS: tuple[tuple[str, str, str], ...] = (
 # All entries are L/R-symmetric so no swap is needed in flip_feature_vector.
 DIST_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("front_paw_spread", KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW),
-    ("back_paw_spread",  KP_BACK_LEFT_PAW,  KP_BACK_RIGHT_PAW),
+    ("back_paw_spread", KP_BACK_LEFT_PAW, KP_BACK_RIGHT_PAW),
 )
 
 # Belly-to-paw: average distance from belly_bottom to visible paws in each pair.
 # Yields (dist/scale, valid). Small value = belly near paws = likely lying.
 _BELLY_FRONT_PAWS = (KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW)
-_BELLY_BACK_PAWS  = (KP_BACK_LEFT_PAW,  KP_BACK_RIGHT_PAW)
+_BELLY_BACK_PAWS = (KP_BACK_LEFT_PAW, KP_BACK_RIGHT_PAW)
 
 # Spine bow: perpendicular deviation of back_middle from the neck_base→tail_base
 # chord, normalized by chord length. Captures spine curvature independent of
@@ -125,12 +159,12 @@ def _build_feature_names() -> list[str]:
     names: list[str] = []
     for kp in COORD_KEYPOINTS:
         names += [f"{kp}.x", f"{kp}.y", f"{kp}.vis"]
-    for a, b, c in ANGLE_TRIPLETS:
+    for _a, b, _c in ANGLE_TRIPLETS:
         names += [f"ang_{b}", f"ang_{b}.valid"]
-    for name, kp1, kp2 in DIST_PAIRS:
+    for name, _kp1, _kp2 in DIST_PAIRS:
         names += [name, f"{name}.valid"]
     names += ["belly_front_paw_dist", "belly_front_paw_dist.valid"]
-    names += ["belly_back_paw_dist",  "belly_back_paw_dist.valid"]
+    names += ["belly_back_paw_dist", "belly_back_paw_dist.valid"]
     names += ["spine_bow", "spine_bow.valid"]
     names += ["bbox_aspect_hw", "n_visible_frac"]
     return names
@@ -142,7 +176,7 @@ N_FEATURES: int = len(FEATURE_NAMES)
 MIN_VISIBLE_KEYPOINTS = 4
 
 
-def feature_vector(frame: Frame) -> Optional[np.ndarray]:
+def feature_vector(frame: Frame) -> np.ndarray | None:
     """Return the fixed-length feature vector for a frame, or None if too few
     keypoints are visible to normalize reliably."""
     visible = frame.visible()
@@ -193,8 +227,7 @@ def feature_vector(frame: Frame) -> Optional[np.ndarray]:
     for paw_names in (_BELLY_FRONT_PAWS, _BELLY_BACK_PAWS):
         visible_paws = [frame.get(k) for k in paw_names if frame.get(k)]
         if belly and visible_paws:
-            dists = [math.hypot(belly.x - p.x, belly.y - p.y) / scale
-                     for p in visible_paws]
+            dists = [math.hypot(belly.x - p.x, belly.y - p.y) / scale for p in visible_paws]
             feats += [float(np.mean(dists)), 1.0]
         else:
             feats += [0.0, 0.0]
@@ -226,15 +259,15 @@ def feature_vector(frame: Frame) -> Optional[np.ndarray]:
 def _build_flip_index() -> np.ndarray:
     name_to_idx = {n: i for i, n in enumerate(FEATURE_NAMES)}
     swap = {}
-    for l, r in _LR_PAIRS:
+    for left, right in _LR_PAIRS:
         for suf in (".x", ".y", ".vis"):
-            swap[name_to_idx[f"{l}{suf}"]] = name_to_idx[f"{r}{suf}"]
-            swap[name_to_idx[f"{r}{suf}"]] = name_to_idx[f"{l}{suf}"]
+            swap[name_to_idx[f"{left}{suf}"]] = name_to_idx[f"{right}{suf}"]
+            swap[name_to_idx[f"{right}{suf}"]] = name_to_idx[f"{left}{suf}"]
     # Angle features: swap left/right limb angles.
     angle_lr = {
-        f"ang_{KP_BACK_LEFT_KNEE}":   f"ang_{KP_BACK_RIGHT_KNEE}",
-        f"ang_{KP_FRONT_LEFT_KNEE}":  f"ang_{KP_FRONT_RIGHT_KNEE}",
-        f"ang_{KP_BACK_LEFT_THIGH}":  f"ang_{KP_BACK_RIGHT_THIGH}",   # hip
+        f"ang_{KP_BACK_LEFT_KNEE}": f"ang_{KP_BACK_RIGHT_KNEE}",
+        f"ang_{KP_FRONT_LEFT_KNEE}": f"ang_{KP_FRONT_RIGHT_KNEE}",
+        f"ang_{KP_BACK_LEFT_THIGH}": f"ang_{KP_BACK_RIGHT_THIGH}",  # hip
         f"ang_{KP_FRONT_LEFT_THIGH}": f"ang_{KP_FRONT_RIGHT_THIGH}",  # shoulder
     }
     for ln, rn in angle_lr.items():
@@ -249,9 +282,7 @@ def _build_flip_index() -> np.ndarray:
 
 _FLIP_INDEX = _build_flip_index()
 # x-coordinate feature positions (negated on horizontal flip).
-_X_INDICES = np.array(
-    [i for i, n in enumerate(FEATURE_NAMES) if n.endswith(".x")], dtype=int
-)
+_X_INDICES = np.array([i for i, n in enumerate(FEATURE_NAMES) if n.endswith(".x")], dtype=int)
 
 
 def flip_feature_vector(vec: np.ndarray) -> np.ndarray:

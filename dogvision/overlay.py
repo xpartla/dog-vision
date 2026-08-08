@@ -3,31 +3,44 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import cv2
 import numpy as np
 
 from .orientation import OrientationResult
 from .posture import (
+    KP_BACK_BASE,
+    KP_BACK_END,
+    KP_BACK_LEFT_KNEE,
+    KP_BACK_LEFT_PAW,
+    KP_BACK_LEFT_THIGH,
+    KP_BACK_MIDDLE,
+    KP_BACK_RIGHT_KNEE,
+    KP_BACK_RIGHT_PAW,
+    KP_BACK_RIGHT_THIGH,
+    KP_FRONT_LEFT_KNEE,
+    KP_FRONT_LEFT_PAW,
+    KP_FRONT_LEFT_THIGH,
+    KP_FRONT_RIGHT_KNEE,
+    KP_FRONT_RIGHT_PAW,
+    KP_FRONT_RIGHT_THIGH,
+    KP_LEFT_EAR_BASE,
+    KP_LEFT_EYE,
+    KP_NECK_BASE,
+    KP_NOSE,
+    KP_RIGHT_EAR_BASE,
+    KP_RIGHT_EYE,
+    KP_TAIL_BASE,
+    KP_TAIL_END,
     Frame,
     PostureFeatures,
-    KP_NOSE, KP_LEFT_EYE, KP_RIGHT_EYE, KP_LEFT_EAR_BASE, KP_RIGHT_EAR_BASE,
-    KP_NECK_BASE, KP_BACK_BASE, KP_BACK_MIDDLE, KP_BACK_END,
-    KP_TAIL_BASE, KP_TAIL_END,
-    KP_FRONT_LEFT_THIGH, KP_FRONT_RIGHT_THIGH,
-    KP_FRONT_LEFT_KNEE, KP_FRONT_RIGHT_KNEE,
-    KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW,
-    KP_BACK_LEFT_THIGH, KP_BACK_RIGHT_THIGH,
-    KP_BACK_LEFT_KNEE, KP_BACK_RIGHT_KNEE,
-    KP_BACK_LEFT_PAW, KP_BACK_RIGHT_PAW,
 )
 
 # Colors are BGR (OpenCV convention)
-HEAD_COLOR = (0, 220, 220)        # yellow
-SPINE_COLOR = (60, 220, 60)       # green
-LEG_COLOR = (220, 200, 0)         # cyan
-TAIL_COLOR = (200, 0, 200)        # magenta
+HEAD_COLOR = (0, 220, 220)  # yellow
+SPINE_COLOR = (60, 220, 60)  # green
+LEG_COLOR = (220, 200, 0)  # cyan
+TAIL_COLOR = (200, 0, 200)  # magenta
 DEFAULT_KP_COLOR = (220, 220, 220)
 
 POSTURE_COLORS = {
@@ -83,14 +96,19 @@ def _kp_color(name: str) -> tuple[int, int, int]:
     return LEG_COLOR
 
 
-def _draw_text(image: np.ndarray, text: str, origin: tuple[int, int],
-               color: tuple[int, int, int], scale: float = 0.7) -> None:
+def _draw_text(
+    image: np.ndarray,
+    text: str,
+    origin: tuple[int, int],
+    color: tuple[int, int, int],
+    scale: float = 0.7,
+) -> None:
     thickness = max(2, round(_scale(image, 3)))
     shadow = max(4, round(_scale(image, 6)))
-    cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
-                (0, 0, 0), shadow, cv2.LINE_AA)
-    cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale,
-                color, thickness, cv2.LINE_AA)
+    cv2.putText(
+        image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), shadow, cv2.LINE_AA
+    )
+    cv2.putText(image, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
 
 
 def _scale(image: np.ndarray, base: float, base_height: int = 720) -> float:
@@ -98,8 +116,9 @@ def _scale(image: np.ndarray, base: float, base_height: int = 720) -> float:
     return base * image.shape[0] / base_height
 
 
-def draw_skeleton(image: np.ndarray, frame: Frame,
-                  edge_thickness: int = 2, point_radius: int = 4) -> None:
+def draw_skeleton(
+    image: np.ndarray, frame: Frame, edge_thickness: int = 2, point_radius: int = 4
+) -> None:
     """Draw skeleton edges and keypoints from a Frame onto the image (in place)."""
     thickness = max(1, round(_scale(image, edge_thickness)))
     radius = max(1, round(_scale(image, point_radius / 2)))
@@ -108,10 +127,9 @@ def draw_skeleton(image: np.ndarray, frame: Frame,
         p2 = frame.get(k2)
         if p1 is None or p2 is None:
             continue
-        cv2.line(image,
-                 (int(p1.x), int(p1.y)),
-                 (int(p2.x), int(p2.y)),
-                 color, thickness, cv2.LINE_AA)
+        cv2.line(
+            image, (int(p1.x), int(p1.y)), (int(p2.x), int(p2.y)), color, thickness, cv2.LINE_AA
+        )
 
     for name, kp in frame.visible().items():
         color = _kp_color(name)
@@ -157,8 +175,16 @@ def draw_orientation_compass(
 
     # "orient" caption
     cap_y = cy + radius + max(13, round(_scale(image, 13)))
-    cv2.putText(image, "orient", (cx - 20, cap_y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.32, (90, 90, 90), 1, cv2.LINE_AA)
+    cv2.putText(
+        image,
+        "orient",
+        (cx - 20, cap_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.32,
+        (90, 90, 90),
+        1,
+        cv2.LINE_AA,
+    )
 
     if result.confidence < 0.1:
         return
@@ -182,10 +208,10 @@ def draw_orientation_compass(
 
 def draw_overlay(
     image: np.ndarray,
-    frame: Optional[Frame],
+    frame: Frame | None,
     posture: tuple[str, float] = ("unknown", 0.0),
-    debug_features: Optional[PostureFeatures] = None,
-    orientation: Optional[OrientationResult] = None,
+    debug_features: PostureFeatures | None = None,
+    orientation: OrientationResult | None = None,
     skeleton_alpha: float = 1.0,
 ) -> None:
     """Full overlay: skeleton + keypoints + posture label + orientation compass (in place).
@@ -206,26 +232,59 @@ def draw_overlay(
     margin = max(12, round(_scale(image, 12)))
 
     p_label, p_score = posture
-    _draw_text(image, f"posture: {p_label} ({p_score:.2f})",
-               (margin, line_gap),
-               POSTURE_COLORS.get(p_label, (255, 255, 255)), scale=font_scale)
+    _draw_text(
+        image,
+        f"posture: {p_label} ({p_score:.2f})",
+        (margin, line_gap),
+        POSTURE_COLORS.get(p_label, (255, 255, 255)),
+        scale=font_scale,
+    )
 
     if debug_features is not None:
         f = debug_features
         debug_scale = _scale(image, 0.55)
         debug_gap = max(22, round(_scale(image, 22)))
         lines = [
-            f"H/W:        {f.body_aspect_h_over_w:.2f}" if f.body_aspect_h_over_w is not None else "H/W:        -",
-            f"knee:       {f.back_knee_angle_deg:.0f} deg" if f.back_knee_angle_deg is not None else "knee:       -",
-            f"head/grnd:  {f.head_above_ground_ratio:.2f}" if f.head_above_ground_ratio is not None else "head/grnd:  -",
-            f"trunk/grnd: {f.trunk_above_ground_ratio:.2f}" if f.trunk_above_ground_ratio is not None else "trunk/grnd: -",
-            f"hip/grnd:   {f.hip_above_ground_ratio:.2f}" if f.hip_above_ground_ratio is not None else "hip/grnd:   -",
-            f"spine:      {f.spine_pitch_deg:+.0f} deg" if f.spine_pitch_deg is not None else "spine:      -",
+            (
+                f"H/W:        {f.body_aspect_h_over_w:.2f}"
+                if f.body_aspect_h_over_w is not None
+                else "H/W:        -"
+            ),
+            (
+                f"knee:       {f.back_knee_angle_deg:.0f} deg"
+                if f.back_knee_angle_deg is not None
+                else "knee:       -"
+            ),
+            (
+                f"head/grnd:  {f.head_above_ground_ratio:.2f}"
+                if f.head_above_ground_ratio is not None
+                else "head/grnd:  -"
+            ),
+            (
+                f"trunk/grnd: {f.trunk_above_ground_ratio:.2f}"
+                if f.trunk_above_ground_ratio is not None
+                else "trunk/grnd: -"
+            ),
+            (
+                f"hip/grnd:   {f.hip_above_ground_ratio:.2f}"
+                if f.hip_above_ground_ratio is not None
+                else "hip/grnd:   -"
+            ),
+            (
+                f"spine:      {f.spine_pitch_deg:+.0f} deg"
+                if f.spine_pitch_deg is not None
+                else "spine:      -"
+            ),
             f"ground:     {'paw' if f.ground_from_paws else 'kp'}",
         ]
         for k, line in enumerate(lines):
-            _draw_text(image, line, (margin, line_gap * 2 + k * debug_gap),
-                       (220, 220, 220), scale=debug_scale)
+            _draw_text(
+                image,
+                line,
+                (margin, line_gap * 2 + k * debug_gap),
+                (220, 220, 220),
+                scale=debug_scale,
+            )
 
     if orientation is not None:
         draw_orientation_compass(image, orientation)

@@ -3,6 +3,7 @@
 Replaces the per-chunk `video_inference_superanimal` call with a persistent object
 that holds the detector + pose runners in memory and processes single frames on demand.
 """
+
 from __future__ import annotations
 
 import math
@@ -37,11 +38,11 @@ class SuperAnimalInferencer:
         device: str | None = "auto",
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
     ) -> None:
+        from deeplabcut.pose_estimation_pytorch.apis.utils import get_inference_runners
         from deeplabcut.pose_estimation_pytorch.modelzoo.utils import (
             get_super_animal_snapshot_path,
             load_super_animal_config,
         )
-        from deeplabcut.pose_estimation_pytorch.apis.utils import get_inference_runners
 
         self.confidence_threshold = confidence_threshold
 
@@ -85,8 +86,7 @@ class SuperAnimalInferencer:
             if not det_preds:
                 # No detector output this frame (e.g. no animal found).
                 return [self._empty_frame()]
-            bbox_ctx = {k: v for k, v in det_preds[0].items()
-                        if k in ("bboxes", "bbox_scores")}
+            bbox_ctx = {k: v for k, v in det_preds[0].items() if k in ("bboxes", "bbox_scores")}
             bboxes = bbox_ctx.get("bboxes")
             if bboxes is None or len(bboxes) == 0:
                 # No animal detected; skip pose inference (DLC raises on empty bboxes).

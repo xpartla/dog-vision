@@ -34,20 +34,37 @@ from dogvision.posture import DEFAULT_CONFIDENCE_THRESHOLD, load_keypoint_frames
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("data_dir", type=Path,
-                        help="Directory with one subfolder per label, each holding .h5 files")
-    parser.add_argument("--out", type=Path, default=Path("dataset.npz"),
-                        help="Output .npz path (default: dataset.npz)")
-    parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD,
-                        help="Min keypoint likelihood to treat a keypoint as visible")
-    parser.add_argument("--stride", type=int, default=1,
-                        help="Keep every Nth frame (consecutive frames are highly "
-                             "correlated; >1 reduces redundancy). Default 1.")
-    parser.add_argument("--augment-flip", action="store_true",
-                        help="Add a horizontally-mirrored copy of every sample "
-                             "(kept in the same clip group so it doesn't leak)")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "data_dir", type=Path, help="Directory with one subfolder per label, each holding .h5 files"
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("dataset.npz"),
+        help="Output .npz path (default: dataset.npz)",
+    )
+    parser.add_argument(
+        "--confidence",
+        type=float,
+        default=DEFAULT_CONFIDENCE_THRESHOLD,
+        help="Min keypoint likelihood to treat a keypoint as visible",
+    )
+    parser.add_argument(
+        "--stride",
+        type=int,
+        default=1,
+        help="Keep every Nth frame (consecutive frames are highly "
+        "correlated; >1 reduces redundancy). Default 1.",
+    )
+    parser.add_argument(
+        "--augment-flip",
+        action="store_true",
+        help="Add a horizontally-mirrored copy of every sample "
+        "(kept in the same clip group so it doesn't leak)",
+    )
     args = parser.parse_args()
 
     if not args.data_dir.is_dir():
@@ -80,14 +97,19 @@ def main() -> None:
                 vec = pf.feature_vector(frames[i])
                 if vec is None:
                     continue
-                X.append(vec); y.append(label); groups.append(clip_id)
+                X.append(vec)
+                y.append(label)
+                groups.append(clip_id)
                 kept += 1
                 if args.augment_flip:
                     X.append(pf.flip_feature_vector(vec))
-                    y.append(label); groups.append(clip_id)
+                    y.append(label)
+                    groups.append(clip_id)
             per_label[label] = per_label.get(label, 0) + kept
-            print(f"  [{label}] {h5.name}: {kept} frames"
-                  + (" (x2 with flip)" if args.augment_flip else ""))
+            print(
+                f"  [{label}] {h5.name}: {kept} frames"
+                + (" (x2 with flip)" if args.augment_flip else "")
+            )
 
     if not X:
         raise SystemExit("No usable frames extracted. Check confidence / inputs.")
@@ -99,7 +121,9 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         args.out,
-        X=X_arr, y=y_arr, groups=groups_arr,
+        X=X_arr,
+        y=y_arr,
+        groups=groups_arr,
         feature_names=np.asarray(pf.FEATURE_NAMES),
         confidence_threshold=np.float32(args.confidence),
     )

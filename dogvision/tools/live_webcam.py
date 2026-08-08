@@ -66,10 +66,15 @@ def _stale_alpha(stale_secs: float) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--camera", type=int, default=0)
-    parser.add_argument("--video", type=Path, default=None,
-                        help="Use a video file instead of the webcam (for testing).")
-    parser.add_argument("--loop", action="store_true",
-                        help="Loop the video file instead of stopping at the end.")
+    parser.add_argument(
+        "--video",
+        type=Path,
+        default=None,
+        help="Use a video file instead of the webcam (for testing).",
+    )
+    parser.add_argument(
+        "--loop", action="store_true", help="Loop the video file instead of stopping at the end."
+    )
     parser.add_argument(
         "--fps",
         type=float,
@@ -79,30 +84,61 @@ def main() -> None:
     parser.add_argument("--model", default="hrnet_w32", choices=["hrnet_w32", "resnet_50"])
     parser.add_argument("--detector", default="fasterrcnn_resnet50_fpn_v2")
     parser.add_argument("--pcutoff", type=float, default=0.6)
-    parser.add_argument("--confidence", type=float, default=DEFAULT_CONFIDENCE_THRESHOLD,
-                        help="Min keypoint likelihood for posture features")
-    parser.add_argument("--smooth-window", type=int, default=10,
-                        help="Majority-vote window size (frames) for posture labels")
-    parser.add_argument("--no-smooth-keypoints", action="store_true",
-                        help="Disable 1-Euro smoothing of keypoint trajectories")
+    parser.add_argument(
+        "--confidence",
+        type=float,
+        default=DEFAULT_CONFIDENCE_THRESHOLD,
+        help="Min keypoint likelihood for posture features",
+    )
+    parser.add_argument(
+        "--smooth-window",
+        type=int,
+        default=10,
+        help="Majority-vote window size (frames) for posture labels",
+    )
+    parser.add_argument(
+        "--no-smooth-keypoints",
+        action="store_true",
+        help="Disable 1-Euro smoothing of keypoint trajectories",
+    )
     parser.add_argument("--smooth-mincutoff", type=float, default=1.0)
     parser.add_argument("--smooth-beta", type=float, default=0.5)
-    parser.add_argument("--posture-model", type=Path, default=None,
-                        help="Trained posture model (.joblib). Uses the learned, "
-                             "viewpoint-robust classifier instead of geometric rules.")
-    parser.add_argument("--no-posture", action="store_true",
-                        help="Skip phase-2 classification and just draw keypoints")
-    parser.add_argument("--debug", action="store_true",
-                        help="Overlay per-feature numeric values on each frame")
+    parser.add_argument(
+        "--posture-model",
+        type=Path,
+        default=None,
+        help="Trained posture model (.joblib). Uses the learned, "
+        "viewpoint-robust classifier instead of geometric rules.",
+    )
+    parser.add_argument(
+        "--no-posture",
+        action="store_true",
+        help="Skip phase-2 classification and just draw keypoints",
+    )
+    parser.add_argument(
+        "--debug", action="store_true", help="Overlay per-feature numeric values on each frame"
+    )
     parser.add_argument("--max-individuals", type=int, default=10)
-    parser.add_argument("--display-width", type=int, default=1280,
-                        help="Resize frames to this width before display (keeps aspect ratio). "
-                             "Lower values fix WSL2 rendering artifacts. 0 = no resize.")
-    parser.add_argument("--display", choices=["auto", "window", "mjpeg"], default="auto",
-                        help="auto: browser stream on WSL, native window otherwise. "
-                             "window: cv2.imshow. mjpeg: stream to http://localhost:<port>/.")
-    parser.add_argument("--port", type=int, default=8090,
-                        help="Port for the MJPEG browser stream (--display mjpeg/auto-on-WSL).")
+    parser.add_argument(
+        "--display-width",
+        type=int,
+        default=1280,
+        help="Resize frames to this width before display (keeps aspect ratio). "
+        "Lower values fix WSL2 rendering artifacts. 0 = no resize.",
+    )
+    parser.add_argument(
+        "--display",
+        choices=["auto", "window", "mjpeg"],
+        default="auto",
+        help="auto: browser stream on WSL, native window otherwise. "
+        "window: cv2.imshow. mjpeg: stream to http://localhost:<port>/.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8090,
+        help="Port for the MJPEG browser stream (--display mjpeg/auto-on-WSL).",
+    )
     args = parser.parse_args()
 
     # --- Capture source setup ---
@@ -138,15 +174,16 @@ def main() -> None:
         posture_clf = LearnedPostureClassifier(args.posture_model)
         if abs(posture_clf.confidence_threshold - args.confidence) > 1e-6:
             args.confidence = posture_clf.confidence_threshold
-        print(f"Using learned posture model {args.posture_model} "
-              f"(confidence {args.confidence:.2f})")
+        print(
+            f"Using learned posture model {args.posture_model} (confidence {args.confidence:.2f})"
+        )
 
     # --- Smoothers (state persists across frames) ---
     kp_smoother = None
     if not args.no_smooth_keypoints:
-        kp_smoother = KeypointSmoother(fps=fps,
-                                       mincutoff=args.smooth_mincutoff,
-                                       beta=args.smooth_beta)
+        kp_smoother = KeypointSmoother(
+            fps=fps, mincutoff=args.smooth_mincutoff, beta=args.smooth_beta
+        )
     posture_smoother = LabelSmoother(window=args.smooth_window)
 
     # --- Load inference runners once ---
@@ -180,10 +217,13 @@ def main() -> None:
             cv2.resizeWindow(_WIN, args.display_width, disp_h)
     else:
         from mjpeg_server import MJPEGServer
+
         mjpeg = MJPEGServer(port=args.port)
         mjpeg.start()
-        print(f"Display: open http://localhost:{args.port}/ in your browser. "
-              f"Press Ctrl-C here to quit.")
+        print(
+            f"Display: open http://localhost:{args.port}/ in your browser. "
+            f"Press Ctrl-C here to quit."
+        )
 
     # Real-time frame pacing (shared by capture throttle + display loop).
     frame_delay_ms = max(1, int(1000 / fps))
@@ -331,8 +371,7 @@ def main() -> None:
             )
 
             if args.display_width > 0:
-                img = cv2.resize(img, (args.display_width, disp_h),
-                                 interpolation=cv2.INTER_LINEAR)
+                img = cv2.resize(img, (args.display_width, disp_h), interpolation=cv2.INTER_LINEAR)
 
             if display_mode == "window":
                 cv2.imshow(_WIN, np.ascontiguousarray(img))

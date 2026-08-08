@@ -74,26 +74,20 @@ class MJPEGServer:
                             continue
                         self.wfile.write(b"--FRAME\r\n")
                         self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                        self.wfile.write(
-                            f"Content-Length: {len(jpeg)}\r\n\r\n".encode()
-                        )
+                        self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode())
                         self.wfile.write(jpeg)
                         self.wfile.write(b"\r\n")
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # browser tab closed/refreshed
 
         self._httpd = ThreadingHTTPServer((host, port), Handler)
-        self._thread = threading.Thread(
-            target=self._httpd.serve_forever, name="mjpeg", daemon=True
-        )
+        self._thread = threading.Thread(target=self._httpd.serve_forever, name="mjpeg", daemon=True)
 
     def start(self) -> None:
         self._thread.start()
 
     def update(self, frame_bgr) -> None:
-        ok, buf = cv2.imencode(
-            ".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality]
-        )
+        ok, buf = cv2.imencode(".jpg", frame_bgr, [cv2.IMWRITE_JPEG_QUALITY, self.quality])
         if not ok:
             return
         with self._cond:

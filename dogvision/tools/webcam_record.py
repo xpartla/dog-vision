@@ -54,7 +54,10 @@ def main() -> None:
         (width, height),
     )
 
-    print(f"Recording {args.duration}s to {args.output} ({width}x{height} @ {fps:.1f}fps, {fps_source})")
+    print(
+        f"Recording {args.duration}s to {args.output} "
+        f"({width}x{height} @ {fps:.1f}fps, {fps_source})"
+    )
     print("Press q in the preview window to stop early.")
 
     start = time.time()

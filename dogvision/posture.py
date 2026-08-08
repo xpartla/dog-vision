@@ -25,7 +25,6 @@ import math
 from collections import Counter, deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -40,12 +39,12 @@ KP_RIGHT_EYE = "right_eye"
 KP_LEFT_EAR_BASE = "left_earbase"
 KP_RIGHT_EAR_BASE = "right_earbase"
 KP_NECK_BASE = "neck_base"
-KP_BACK_BASE = "back_base"        # FRONT of the back (near withers / shoulders)
+KP_BACK_BASE = "back_base"  # FRONT of the back (near withers / shoulders)
 KP_BACK_MIDDLE = "back_middle"
-KP_BACK_END = "back_end"          # REAR of the back (near hips / sacrum)
+KP_BACK_END = "back_end"  # REAR of the back (near hips / sacrum)
 KP_TAIL_BASE = "tail_base"
 KP_TAIL_END = "tail_end"
-KP_FRONT_LEFT_THIGH = "front_left_thai"   # SuperAnimal labels these "thai"
+KP_FRONT_LEFT_THIGH = "front_left_thai"  # SuperAnimal labels these "thai"
 KP_FRONT_RIGHT_THIGH = "front_right_thai"
 KP_FRONT_LEFT_KNEE = "front_left_knee"
 KP_FRONT_RIGHT_KNEE = "front_right_knee"
@@ -59,13 +58,13 @@ KP_BACK_LEFT_PAW = "back_left_paw"
 KP_BACK_RIGHT_PAW = "back_right_paw"
 
 TRUNK_KEYPOINTS = (KP_NECK_BASE, KP_BACK_END, KP_BACK_MIDDLE, KP_BACK_BASE)
-ALL_PAW_KEYPOINTS = (KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW,
-                     KP_BACK_LEFT_PAW, KP_BACK_RIGHT_PAW)
+ALL_PAW_KEYPOINTS = (KP_FRONT_LEFT_PAW, KP_FRONT_RIGHT_PAW, KP_BACK_LEFT_PAW, KP_BACK_RIGHT_PAW)
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.5
 
 
 # === Per-frame keypoint container ===========================================
+
 
 @dataclass(frozen=True)
 class Keypoint:
@@ -79,17 +78,20 @@ class Frame:
     keypoints: dict[str, Keypoint]
     confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD
 
-    def get(self, name: str) -> Optional[Keypoint]:
+    def get(self, name: str) -> Keypoint | None:
         kp = self.keypoints.get(name)
         if kp is None or kp.confidence < self.confidence_threshold:
             return None
         return kp
 
     def visible(self) -> dict[str, Keypoint]:
-        return {n: kp for n, kp in self.keypoints.items() if kp.confidence >= self.confidence_threshold}
+        return {
+            n: kp for n, kp in self.keypoints.items() if kp.confidence >= self.confidence_threshold
+        }
 
 
 # === DLC .h5 loader =========================================================
+
 
 def list_keypoint_names(h5_path: Path) -> list[str]:
     """Return all bodypart names found in a DLC predictions .h5 file."""
@@ -178,6 +180,7 @@ def load_keypoint_frames(
 
 # === Geometric helpers ======================================================
 
+
 def _vec(a: Keypoint, b: Keypoint) -> np.ndarray:
     return np.array([b.x - a.x, b.y - a.y], dtype=float)
 
@@ -195,17 +198,17 @@ def _angle_at(b: Keypoint, a: Keypoint, c: Keypoint) -> float:
 
 # === Keypoint smoothing (1€ filter) =========================================
 
+
 class _OneEuroFilter:
     """1€ filter (Casiez et al. 2012). Adaptive low-pass: smooths slow motion
     heavily, lets fast motion through with little lag."""
 
-    def __init__(self, fps: float, mincutoff: float = 1.0, beta: float = 0.5,
-                 dcutoff: float = 1.0):
+    def __init__(self, fps: float, mincutoff: float = 1.0, beta: float = 0.5, dcutoff: float = 1.0):
         self.fps = fps
         self.mincutoff = mincutoff
         self.beta = beta
         self.dcutoff = dcutoff
-        self._x_prev: Optional[float] = None
+        self._x_prev: float | None = None
         self._dx_prev: float = 0.0
 
     @staticmethod
@@ -229,7 +232,7 @@ class _OneEuroFilter:
         return x_smooth
 
     @property
-    def last(self) -> Optional[float]:
+    def last(self) -> float | None:
         return self._x_prev
 
 
@@ -271,14 +274,15 @@ class KeypointSmoother:
 
 # === Posture features =======================================================
 
+
 @dataclass
 class PostureFeatures:
-    body_aspect_h_over_w: Optional[float]      # height / width of visible-keypoint bbox
-    back_knee_angle_deg: Optional[float]       # ~180 straight, ~90 sharp bend
-    trunk_above_ground_ratio: Optional[float]  # (ground_y - trunk_median_y) / bbox_diag
-    head_above_ground_ratio: Optional[float]   # (ground_y - head_mean_y) / bbox_diag
-    hip_above_ground_ratio: Optional[float]    # (ground_y - hip_y) / bbox_diag
-    spine_pitch_deg: Optional[float]           # angle of spine vs horizontal; +ve = front higher
+    body_aspect_h_over_w: float | None  # height / width of visible-keypoint bbox
+    back_knee_angle_deg: float | None  # ~180 straight, ~90 sharp bend
+    trunk_above_ground_ratio: float | None  # (ground_y - trunk_median_y) / bbox_diag
+    head_above_ground_ratio: float | None  # (ground_y - head_mean_y) / bbox_diag
+    hip_above_ground_ratio: float | None  # (ground_y - hip_y) / bbox_diag
+    spine_pitch_deg: float | None  # angle of spine vs horizontal; +ve = front higher
 
     # Diagnostic: True if the ground estimate coincided with a real paw, False
     # if it fell back to the lowest non-paw keypoint (knee / hock / tail).
@@ -301,7 +305,7 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
     visible = frame.visible()
 
     # Body H/W aspect (weak signal; weighted lightly in the classifier)
-    body_aspect: Optional[float] = None
+    body_aspect: float | None = None
     body_aspect_conf = 0.0
     if len(visible) >= 4:
         xs = np.array([kp.x for kp in visible.values()])
@@ -316,8 +320,8 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
     # the normalizer for the height-ratio features below. The diagonal (vs. the
     # longer side) varies smoothly with viewpoint and never flips between the
     # width and height axis as the dog rotates.
-    bbox_diag: Optional[float] = None
-    ground_y: Optional[float] = None
+    bbox_diag: float | None = None
+    ground_y: float | None = None
     if len(visible) >= 2:
         xs = [kp.x for kp in visible.values()]
         ys = [kp.y for kp in visible.values()]
@@ -336,12 +340,11 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
     paw_pts = [frame.get(n) for n in ALL_PAW_KEYPOINTS]
     paw_pts = [p for p in paw_pts if p is not None]
     ground_from_paws = bool(
-        paw_pts and ground_y is not None
-        and abs(max(p.y for p in paw_pts) - ground_y) < 1e-6
+        paw_pts and ground_y is not None and abs(max(p.y for p in paw_pts) - ground_y) < 1e-6
     )
 
     # Back-knee (stifle) angle: pick the leg with highest min-confidence.
-    back_knee: Optional[float] = None
+    back_knee: float | None = None
     back_knee_conf = 0.0
     for thigh_n, knee_n, paw_n in (
         (KP_BACK_LEFT_THIGH, KP_BACK_LEFT_KNEE, KP_BACK_LEFT_PAW),
@@ -360,7 +363,7 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
     trunk_pts = [frame.get(n) for n in TRUNK_KEYPOINTS]
     trunk_pts = [p for p in trunk_pts if p is not None]
 
-    trunk_above_ground: Optional[float] = None
+    trunk_above_ground: float | None = None
     trunk_above_ground_conf = 0.0
     if len(trunk_pts) >= 2 and bbox_diag is not None and ground_y is not None:
         trunk_above_ground = (ground_y - _median_y(trunk_pts)) / bbox_diag
@@ -373,7 +376,7 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
     head_pts = [frame.get(n) for n in (KP_NOSE, KP_LEFT_EYE, KP_RIGHT_EYE)]
     head_pts = [p for p in head_pts if p is not None]
 
-    head_above_ground: Optional[float] = None
+    head_above_ground: float | None = None
     head_above_ground_conf = 0.0
     if head_pts and bbox_diag is not None and ground_y is not None:
         head_y = sum(p.y for p in head_pts) / len(head_pts)
@@ -385,7 +388,7 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
     # landmark in SuperAnimal is `back_end` (rear of the back), with tail_base
     # as a near-by fallback.
     hip = frame.get(KP_BACK_END) or frame.get(KP_TAIL_BASE)
-    hip_above_ground: Optional[float] = None
+    hip_above_ground: float | None = None
     hip_above_ground_conf = 0.0
     if hip and bbox_diag is not None and ground_y is not None:
         hip_above_ground = (ground_y - hip.y) / bbox_diag
@@ -394,7 +397,7 @@ def compute_posture_features(frame: Frame) -> PostureFeatures:
     # Spine pitch (shoulder higher than hip = positive = sitting indicator).
     # Shoulder = `back_base` (front of back), hip = `back_end` (rear of back).
     shoulder = frame.get(KP_BACK_BASE) or frame.get(KP_NECK_BASE)
-    spine_pitch: Optional[float] = None
+    spine_pitch: float | None = None
     spine_pitch_conf = 0.0
     if hip and shoulder:
         dy = hip.y - shoulder.y
@@ -452,7 +455,6 @@ def classify_posture(features: PostureFeatures) -> tuple[str, float]:
     spine_steep = pitch is not None and pitch > 20.0
     trunk_low = trunk_ratio is not None and trunk_ratio < 0.15
     head_low = head_ratio is not None and head_ratio < 0.15
-    hip_low = hip_ratio is not None and hip_ratio < 0.15
 
     # Lying: trunk resting at the ground with a near-horizontal spine. A steep
     # spine means the dog is propped up at the front (sitting), not lying flat.
@@ -524,6 +526,7 @@ def classify_posture(features: PostureFeatures) -> tuple[str, float]:
 
 # === Learned posture classifier =============================================
 
+
 class LearnedPostureClassifier:
     """Drop-in replacement for `classify_posture` backed by a trained model.
 
@@ -549,7 +552,9 @@ class LearnedPostureClassifier:
         self._model = bundle["model"]
         self._classes = list(bundle["classes"])
         self._feature_names = list(bundle["feature_names"])
-        self.confidence_threshold = float(bundle.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD))
+        self.confidence_threshold = float(
+            bundle.get("confidence_threshold", DEFAULT_CONFIDENCE_THRESHOLD)
+        )
         self.min_proba = min_proba
         self._pf = pf
 
@@ -560,7 +565,7 @@ class LearnedPostureClassifier:
                 f"changed since training — retrain with build_dataset.py/train_posture.py."
             )
 
-    def classify(self, frame: "Frame") -> tuple[str, float]:
+    def classify(self, frame: Frame) -> tuple[str, float]:
         """Return (label, probability). 'unknown' if too few keypoints or the
         top class probability is below `min_proba`."""
         vec = self._pf.feature_vector(frame)
@@ -576,11 +581,12 @@ class LearnedPostureClassifier:
     def classify_batch(self, vecs: np.ndarray) -> np.ndarray:
         """Batch predict_proba — avoids per-call sklearn parallel overhead."""
         import warnings
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             return self._model.predict_proba(vecs)
 
-    def classify_frames(self, frames: "list[Frame]") -> "list[tuple[str, float]]":
+    def classify_frames(self, frames: list[Frame]) -> list[tuple[str, float]]:
         """Classify a list of frames in one batch call (much faster for RF)."""
         vecs, indices = [], []
         results: list[tuple[str, float]] = [("unknown", 0.0)] * len(frames)
@@ -591,7 +597,7 @@ class LearnedPostureClassifier:
                 indices.append(i)
         if vecs:
             probas = self.classify_batch(np.stack(vecs))
-            for idx, proba in zip(indices, probas):
+            for idx, proba in zip(indices, probas, strict=True):
                 best = int(np.argmax(proba))
                 label, p = self._classes[best], float(proba[best])
                 results[idx] = (label, p) if p >= self.min_proba else ("unknown", p)
@@ -599,6 +605,7 @@ class LearnedPostureClassifier:
 
 
 # === Sliding-window smoothing ==============================================
+
 
 class LabelSmoother:
     """Majority-vote label over a sliding window of recent predictions.
@@ -650,7 +657,7 @@ def merge_short_segments(
     result = list(labels)
 
     # Pass 1: forward-fill unknown with the last stable label.
-    stable: Optional[str] = None
+    stable: str | None = None
     for i in range(len(result)):
         if result[i] != unknown_label:
             stable = result[i]
@@ -658,7 +665,7 @@ def merge_short_segments(
             result[i] = stable
 
     # Back-fill any leading unknowns from the first stable label.
-    first_stable = next((l for l in result if l != unknown_label), unknown_label)
+    first_stable = next((lbl for lbl in result if lbl != unknown_label), unknown_label)
     for i in range(len(result)):
         if result[i] == unknown_label:
             result[i] = first_stable
@@ -682,6 +689,10 @@ def merge_short_segments(
     while changed:
         changed = False
         segs = _segments(result)
+        # A single segment has no neighbour to merge into — even if it is
+        # shorter than min_length (e.g. a clip with fewer frames than that).
+        if len(segs) <= 1:
+            break
         # Find the shortest segment below the threshold.
         short_segs = [(idx, s) for idx, s in enumerate(segs) if s[2] < min_length]
         if not short_segs:
